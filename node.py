@@ -76,47 +76,30 @@ clientes = {}    # {id_cliente: nombre}
 guias = {}       # {codigo_guia: {"fecha_envio": str, "estado": str}}
 lock_inventario = threading.Lock()
 
-# Carga inventario a memoria con control de id y serie
 for item in coleccion_inventario.find():
-    id_ = item.get("id")
-    if id_ is None:
-        id_ = str(item.get("_id"))
-    serie = item.get("serie")
-    if serie is None:
-        print(f"[WARN] Documento inventario sin serie: {item}")
-        continue
-    clave = (str(id_), str(serie))
+    clave = (str(item["id"]), str(item["serie"]))
     inventario[clave] = {
-        "id": id_,
-        "serie": serie,
-        "nombre": item.get("nombre", "Sin nombre"),
-        "cantidad": item.get("cantidad", 0),
-        "ubicacion": item.get("ubicacion", "Desconocida"),
+        "id": item["id"],
+        "serie": item["serie"],
+        "nombre": item["nombre"],
+        "cantidad": item["cantidad"],
+        "ubicacion": item["ubicacion"],
     }
 
-# Carga clientes a memoria con control de id
 for cliente in coleccion_clientes.find():
-    id_cli = cliente.get("id")
-    if id_cli is None:
-        id_cli = str(cliente.get("_id"))
-    clientes[str(id_cli)] = {
-        "id": id_cli,
-        "nombre": cliente.get("nombre", "Sin nombre"),
-        "email": cliente.get("email", ""),
-        "telefono": cliente.get("telefono", ""),
+    clientes[str(cliente["id"])] = {
+        "id": cliente["id"],
+        "nombre": cliente["nombre"],
+        "email": cliente["email"],
+        "telefono": cliente["telefono"]
     }
 
-# Carga guías a memoria con control de id
 for guia in coleccion_guias.find():
-    id_guia = guia.get("id")
-    if id_guia is None:
-        id_guia = str(guia.get("_id"))
-    guias[str(id_guia)] = {
-        "codigo": guia.get("codigo", "Sin código"),
-        "fecha_envio": guia.get("fecha_envio", "Sin fecha"),
-        "estado": guia.get("estado", "Desconocido"),
+    guias[str(guia["id"])] = {
+        "codigo": guia["codigo"],
+        "fecha_envio": guia["fecha_envio"],
+        "estado": guia["estado"]
     }
-
 
 # =====================
 # Broadcast discovery
@@ -370,6 +353,7 @@ def atender_conexion(conn, addr):
             # Propagar a todos los nodos que la compra fue realizada
             enviar_a_todos({
                 "tipo": "compra_realizada",
+                "origen": (IP_LOCAL, PUERTO_NODO),
                 "id_articulo": id_art,
                 "serie_articulo": serie_art,
                 "id_cliente": id_cli,
@@ -523,7 +507,8 @@ def atender_conexion(conn, addr):
                     print(f"[ERROR] Artículo {id_art} (Serie: {serie_art}) no encontrado en el inventario local.")
                     # pedimos consenso para actualizar el inventario
                     enviar_a_todos({
-                        "tipo": "solicitar_estado"
+                        "tipo": "solicitar_estado",
+                        "origen": (IP_LOCAL, PUERTO_NODO),
                     })
             # registrar guía de envío
             guia_codigo = f"{id_art}-{serie_art}-{ubicacion}-{id_cli}"
@@ -594,6 +579,7 @@ def enviar_a_maestro(mensaje):
                     # actualizamos a todos los nodos
                     enviar_a_todos({
                         "tipo": "compra_realizada",
+                        "origen": mensaje["origen"], # para replicar el origen de la compra
                         "id_articulo": mensaje["id_articulo"],
                         "serie_articulo": mensaje["serie_articulo"],
                         "id_cliente": mensaje["id_cliente"],
@@ -620,6 +606,7 @@ def enviar_a_maestro(mensaje):
                 log_local(f"Artículo agregado: {mensaje['id_articulo']} (Serie: {mensaje['serie_articulo']}) (+{mensaje['cantidad']})")
                 enviar_a_todos({
                     "tipo": "articulo_agregado",
+                    "origen": mensaje["origen"],  # para replicar el origen de la adición
                     "id_articulo": mensaje["id_articulo"],
                     "serie_articulo": mensaje["serie_articulo"],
                     "nombre_articulo": mensaje["nombre_articulo"],
@@ -647,6 +634,7 @@ def enviar_a_maestro(mensaje):
             log_local(f"Cliente actualizado: {id_cli} -> {nombre}")
             enviar_a_todos({
                 "tipo": "cliente_actualizado",
+                "origen": mensaje["origen"],  # para replicar el origen de la actualización
                 "id_cliente": id_cli,
                 "nombre": nombre,
                 "email": correo,
@@ -690,7 +678,6 @@ def comparar_datos():
         coleccion_clientes.insert_many([{"id": k[0], "nombre": v["nombre"], "email": v["email"], "telefono": v["telefono"]} for k, v in clientes])
         # Notificar a todos los nodos
         msg = {
-            "origen": (IP_LOCAL, PUERTO_NODO),
             "tipo": "forzar_estado",
             "estado": {
                 "inventario": [{"id": k[0], "serie": k[1], "nombre": v["nombre"], "cantidad": v["cantidad"], "ubicacion": v["ubicacion"]} for k, v in inventario],
