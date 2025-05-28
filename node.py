@@ -13,8 +13,17 @@ lista_sucursales = ["CDMX", "GDL", "MTY", "SLP", "PUE", "QRO", "TOL", "VER", "OA
 
 lista_puertos = [ x for x in range(60000, 60010)]
 
-PUERTO_BROADCAST = 50000
-PUERTO_NODO = random.choice(lista_puertos)
+def encontrar_puerto_disponible():
+    for puerto in range(60000, 60010):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('', puerto))
+                return puerto
+        except:
+            continue
+    raise Exception("No hay puertos disponibles")
+
+PUERTO_NODO = encontrar_puerto_disponible()
 INTERVALO_DISCOVERY = 5
 INTERVALO_VERIFICACION_MAESTRO = 10
 NODOS_DESCUBIERTOS = {} # {ip: {"puerto": int, "sucursal": str}}
@@ -116,7 +125,8 @@ def enviar_broadcast():
         s.settimeout(1)
         while time.time() - start_time < tiempo_vida:
             mensaje = f"DISCOVER:{IP_LOCAL}:{PUERTO_NODO}:{SUCURSAL}"
-            s.sendto(mensaje.encode(), ('<broadcast>', PUERTO_BROADCAST))
+            broadcast_ip = '.'.join(IP_LOCAL.split('.')[:-1]) + '.255'
+            s.sendto(mensaje.encode(), (broadcast_ip, PUERTO_BROADCAST))
             time.sleep(1)
     print("[INFO] Broadcast discovery enviado")
 
@@ -585,11 +595,15 @@ def enviar_a_todos(mensaje):
     for ip, info in NODOS_DESCUBIERTOS.items():
         port = info["puerto"]
         try:
+            log_local(f"Intentando enviar a {ip}:{port} - {mensaje['tipo']}")
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(3)
                 s.connect((ip, port))
                 s.sendall(json.dumps(mensaje).encode())
-        except:
-            print(f"[ERROR] No se pudo enviar a {ip}:{port}")
+                respuesta = s.recv(1024)
+                log_local(f"Respuesta de {ip}:{port} - {respuesta}")
+        except Exception as e:
+            log_local(f"Error enviando a {ip}:{port} - {str(e)}")
 
 def enviar_a_maestro(mensaje):
     global MAESTRO_ACTUAL
