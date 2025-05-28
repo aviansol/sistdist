@@ -12,29 +12,14 @@ from pymongo import MongoClient
 lista_sucursales = ["CDMX", "GDL", "MTY", "SLP", "PUE", "QRO", "TOL", "VER", "OAX", "CHI"]
 
 lista_puertos = [ x for x in range(60000, 60010)]
-lista_broadcast = [x for x in range(50000, 50010)]
 
-PUERTO_BROADCAST = random.choice(lista_broadcast)
+PUERTO_BROADCAST = 50000
 PUERTO_NODO = random.choice(lista_puertos)
 INTERVALO_DISCOVERY = 5
 INTERVALO_VERIFICACION_MAESTRO = 10
-NODOS_DESCUBIERTOS = {}
+NODOS_DESCUBIERTOS = {} # {ip: {"puerto": int, "sucursal": str}}
 SOY_MAESTRO = False
-import socket
-
-def get_local_ip():
-    try:
-        # Se conecta a una dirección externa pero no envía datos
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip_local = s.getsockname()[0]
-        s.close()
-        return ip_local
-    except Exception as e:
-        print(f"Error al obtener la IP: {e}")
-        return None
-
-IP_LOCAL = get_local_ip()
+IP_LOCAL = socket.gethostbyname(socket.gethostname())
 MAESTRO_ACTUAL = None
 
 SUCURSAL = random.choice(lista_sucursales) + " " + str(random.randint(1, 10))
@@ -117,23 +102,18 @@ for guia in coleccion_guias.find():
     }
 
 # =====================
-# Broadcast discovery (con timeout)
+# Broadcast discovery
 # =====================
 def enviar_broadcast():
-    global IP_LOCAL, PUERTO_NODO
-    global NODOS_DESCUBIERTOS
+    global IP_LOCAL, PUERTO_NODO, SUCURSAL
     tiempo_vida = 10  # segundos
     start_time = time.time()
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         s.settimeout(1)
         while time.time() - start_time < tiempo_vida:
-            mensaje = f"DISCOVER:{IP_LOCAL}:{PUERTO_NODO}"
-            for puerto in lista_broadcast:
-                try:
-                    s.sendto(mensaje.encode(), ('<broadcast>', puerto))
-                except Exception:
-                    pass
+            mensaje = f"DISCOVER:{IP_LOCAL}:{PUERTO_NODO}:{SUCURSAL}"
+            s.sendto(mensaje.encode(), ('<broadcast>', PUERTO_BROADCAST))
             time.sleep(1)
     print("[INFO] Broadcast discovery enviado")
 
@@ -141,7 +121,7 @@ def enviar_broadcast():
 # Escuchar broadcast discovery (revive por 10s tras recibir)
 # =====================
 def escuchar_broadcast():
-    global NODOS_DESCUBIERTOS
+    global NODOS_DESCUBIERTOS, MAESTRO_ACTUAL, SOY_MAESTRO
     tiempo_vida = 10  # segundos
     while True:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -157,17 +137,32 @@ def escuchar_broadcast():
                         partes = mensaje.split(":")
                         ip_nodo = partes[1]
                         puerto_nodo = int(partes[2])
+                        sucursal_nodo = partes[3] if len(partes) > 3 else "N/A"
                         if ip_nodo != IP_LOCAL:
-                            NODOS_DESCUBIERTOS[ip_nodo] = puerto_nodo
+                            NODOS_DESCUBIERTOS[ip_nodo] = {
+                                "puerto": puerto_nodo,
+                                "sucursal": sucursal_nodo
+                            }
                             # Reiniciar el tiempo de vida al recibir un nuevo broadcast
                             start_time = time.time()
+                            # Decidir maestro por IP mayor
+                            ips = list(NODOS_DESCUBIERTOS.keys()) + [IP_LOCAL]
+                            nuevo_maestro = max(ips)
+                            if IP_LOCAL == nuevo_maestro:
+                                SOY_MAESTRO = True
+                                MAESTRO_ACTUAL = IP_LOCAL
+                                print(f"[INFO] Soy el nuevo nodo maestro (Sucursal: {SUCURSAL})")
+                                notificar_nuevo_maestro()
+                            else:
+                                SOY_MAESTRO = False
+                                MAESTRO_ACTUAL = nuevo_maestro
+                                print(f"[INFO] Nodo esclavo. Maestro: {MAESTRO_ACTUAL}")
                 except socket.timeout:
                     break
                 except Exception:
                     continue
-        # Al terminar el tiempo de vida, el hilo muere y será relanzado por el main
         break
-    print("[INFO] Descubierto por: ", NODOS_DESCUBIERTOS)
+    print("[INFO] Descubierto por: ", [x["sucursal"] for x in NODOS_DESCUBIERTOS.values()])
 
     
 
@@ -274,14 +269,18 @@ def atender_conexion(conn, addr):
             }
             nombre_objeto = inventario[(id_art, serie_art)]["nombre"]
             print(f"[GUIA] Guía {guia_codigo} generada para la compra del artículo {nombre_objeto} (Serie: {serie_art}) por el cliente {id_cli}")
+            conn.sendall(b"ok")  # Al final del bloque de compra
 
         elif tipo == "solicitar_compra":
             if not SOY_MAESTRO:
                 return
-            nodo = mensaje["origen"]
+
+            origen = mensaje.get("origen")
+            ip_origen, puerto_origen = origen
             id_art = mensaje["id_articulo"]
             id_cli = mensaje["id_cliente"]
-            serie_art = mensaje.get("serie_articulo", "N/A")  # Nuevo: enviar número de serie
+            serie_art = mensaje.get("serie_articulo", "N/A")
+            fecha = mensaje.get("fecha_envio", time.strftime("%Y-%m-%d %H:%M:%S"))
 
             if (id_art, serie_art) in articulos_en_uso:
                 log_local(f"Rechazada compra por concurrencia: {id_art} (Serie: {serie_art})")
@@ -289,15 +288,81 @@ def atender_conexion(conn, addr):
                 return
 
             articulos_en_uso.add((id_art, serie_art))
+
+            # Buscar qué nodo tiene el artículo
+            nodo_con_articulo = None
+            for ip, info in NODOS_DESCUBIERTOS.items():
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.settimeout(3)
+                        s.connect((ip, info["puerto"]))
+                        s.sendall(json.dumps({"tipo": "solicitar_estado"}).encode())
+                        data = s.recv(8192)
+                        estado = json.loads(data.decode())
+                        for art in estado.get("inventario", []):
+                            if str(art["id"]) == id_art and str(art["serie"]) == serie_art and art["cantidad"] > 0:
+                                nodo_con_articulo = (ip, info["puerto"])
+                                break
+                except Exception as e:
+                    print(f"[WARN] No se pudo consultar el nodo {ip}: {e}")
+                if nodo_con_articulo:
+                    break
+
+            if not nodo_con_articulo:
+                print(f"[MAESTRO] Ningún nodo tiene el artículo {id_art} (Serie: {serie_art}). Me lo adjudico.")
+                with lock_inventario:
+                    inventario[(id_art, serie_art)] = {
+                        "id": id_art,
+                        "serie": serie_art,
+                        "nombre": f"Desconocido {id_art}",
+                        "cantidad": 1,
+                        "ubicacion": SUCURSAL
+                    }
+                    coleccion_inventario.insert_one({
+                        "id": int(id_art),
+                        "serie": int(serie_art),
+                        "nombre": f"Desconocido {id_art}",
+                        "cantidad": 1,
+                        "ubicacion": SUCURSAL
+                    })
+
+                nodo_con_articulo = (IP_LOCAL, PUERTO_NODO)
+
+            # Enviar orden de compra al nodo que lo tiene
+            ip_destino, puerto_destino = nodo_con_articulo
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.connect((nodo, PUERTO_NODO))
-                    s.sendall(json.dumps({"tipo": "compra", "id_articulo": id_art, "serie_articulo": serie_art, "id_cliente": id_cli}).encode())
-            except:
-                print(f"[MAESTRO] Error al enviar compra autorizada a {nodo}")
+                    s.settimeout(5)
+                    s.connect((ip_destino, puerto_destino))
+                    s.sendall(json.dumps({
+                        "tipo": "compra",
+                        "id_articulo": id_art,
+                        "serie_articulo": serie_art,
+                        "id_cliente": id_cli,
+                        "fecha": fecha
+                    }).encode())
+                    # Esperar confirmación
+                    respuesta = s.recv(1024)
+                    if respuesta != b"ok":
+                        raise Exception("Respuesta inesperada del nodo")
+            except Exception as e:
+                print(f"[MAESTRO] Falló la compra con el nodo {ip_destino}: {e}")
+                articulos_en_uso.remove((id_art, serie_art))
+                return
 
-            time.sleep(2)
+            # Propagar a todos los nodos que la compra fue realizada
+            enviar_a_todos({
+                "tipo": "compra_realizada",
+                "id_articulo": id_art,
+                "serie_articulo": serie_art,
+                "id_cliente": id_cli,
+                "ubicacion": SUCURSAL,
+                "fecha_envio": fecha
+            })
+
             articulos_en_uso.remove((id_art, serie_art))
+
+
 
         elif tipo == "agregar_articulo":
             id_art = mensaje["id_articulo"]
@@ -412,6 +477,7 @@ def atender_conexion(conn, addr):
             }, upsert=True)
             log_local(f"Cliente actualizado: {id_cli} -> {nombre}")
             print(f"[CLIENTE] Actualizado: {id_cli} -> {nombre}")
+        
         elif tipo == "compra_realizada":
             id_art = mensaje["id_articulo"]
             serie_art = mensaje["serie_articulo"]
@@ -459,13 +525,14 @@ def notificar_nuevo_maestro():
 # Cliente para enviar mensajes
 # =====================
 def enviar_a_todos(mensaje):
-    for ip, port in NODOS_DESCUBIERTOS.items():
+    for ip, info in NODOS_DESCUBIERTOS.items():
+        port = info["puerto"]
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.connect((ip, port))
                 s.sendall(json.dumps(mensaje).encode())
         except:
-            print(f"[ERROR] No se pudo enviar a {ip}")
+            print(f"[ERROR] No se pudo enviar a {ip}:{port}")
 
 def enviar_a_maestro(mensaje):
     global MAESTRO_ACTUAL
@@ -606,6 +673,7 @@ def comparar_datos():
         coleccion_clientes.insert_many([{"id": k[0], "nombre": v["nombre"], "email": v["email"], "telefono": v["telefono"]} for k, v in clientes])
         # Notificar a todos los nodos
         msg = {
+            "origen": (IP_LOCAL, PUERTO_NODO),
             "tipo": "forzar_estado",
             "estado": {
                 "inventario": [{"id": k[0], "serie": k[1], "nombre": v["nombre"], "cantidad": v["cantidad"], "ubicacion": v["ubicacion"]} for k, v in inventario],
@@ -636,6 +704,7 @@ def interfaz():
             id_cli = input("ID Cliente: ")
             msg = {
                 "tipo": "solicitar_compra",
+                "origen": (IP_LOCAL,PUERTO_NODO),
                 "id_articulo": id_art,
                 "serie_articulo": serie_art,
                 "id_cliente": id_cli,
@@ -770,11 +839,8 @@ def interfaz():
 # =====================
 # Main
 # =====================
-
-# Lanzar hilos para discovery de nodos
 threading.Thread(target=enviar_broadcast, daemon=True).start()
 threading.Thread(target=escuchar_broadcast, daemon=True).start()
-
 threading.Thread(target=servidor_nodo, daemon=True).start()
 threading.Thread(target=elegir_maestro, daemon=True).start()
 threading.Thread(target=verificar_maestro, daemon=True).start()
