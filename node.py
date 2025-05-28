@@ -739,16 +739,17 @@ def comparar_datos():
     print("[CONSENSO] Comparando datos entre nodos")
     registros = {}
 
-    for ip, port in NODOS_DESCUBIERTOS.items():
+    for ip, info in NODOS_DESCUBIERTOS.items():
         try:
+            puerto = info["puerto"]  # Extrae el número de puerto
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.connect((ip, port))
+                s.connect((ip, puerto))
                 s.sendall(json.dumps({"tipo": "solicitar_estado"}).encode())
                 data = s.recv(8192)
                 estado = json.loads(data.decode())
                 registros[ip] = estado
         except Exception as e:
-            print(f"[CONSENSO] Error con nodo {ip}:{port} -> {e}")
+            print(f"[CONSENSO] Error con nodo {ip}:{info} -> {e}")
             continue
 
     if not registros:
