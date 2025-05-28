@@ -886,7 +886,7 @@ def interfaz():
             print("1. Artículo")
             print("2. Cliente")
             subcmd = input("> ").strip().lower()
-            if subcmd == "artículo":
+            if subcmd == "articulo" or subcmd == "artículo" or subcmd == "1":
                 nombre_art = input("Nombre Artículo: ")
                 serie_art = input("Serie Artículo: ")
                 cantidad = int(input("Cantidad: "))
@@ -902,7 +902,7 @@ def interfaz():
                 }
                 enviar_a_maestro(msg)
                 
-            elif subcmd == "cliente":
+            elif subcmd == "cliente" or subcmd == "2":
                 nombre = input("Nombre Cliente: ")
                 correo = input("Email Cliente: ")
                 telefono = input("Teléfono Cliente: ")
@@ -929,25 +929,25 @@ def interfaz():
             print("5. nodos")
             print("6. maestro")
             subcmd = input("> ").strip().lower()
-            if subcmd == "inventario":
+            if subcmd == "inventario" or subcmd == "1":
                 print("---------Inventario---------")
                 for item in inventario.values():
                     print(f"ID: {item['id']} Nombre: {item['nombre']}, Serie: {item['serie']}, Cantidad: {item['cantidad']}, Ubicación: {item['ubicacion']}")
-            elif subcmd == "clientes":
+            elif subcmd == "clientes" or subcmd == "2":
                 print("---------Clientes---------")
                 for cliente in clientes.values():
                     print(f"ID: {cliente['id']} Nombre: {cliente['nombre']}, Email: {cliente['email']}, Teléfono: {cliente['telefono']}")
-            elif subcmd == "guias":
+            elif subcmd == "guias" or subcmd == "3":
                 print("---------Envios---------")
                 for guia in guias.values():
                     print(f"Código: {guia['codigo']}, Fecha: {guia['fecha_envio']}, Estado: {guia['estado']}")
-            elif subcmd == "sucursal actual":
+            elif subcmd == "sucursal actual" or subcmd == "4":
                 print(f"Sucursal actual: {SUCURSAL}")
-            elif subcmd == "nodos":
+            elif subcmd == "nodos" or subcmd == "5":
                 print("---------Nodos Descubiertos---------")
                 for ip, port in NODOS_DESCUBIERTOS.items():
                     print(f"IP: {ip}, Puerto: {port}")
-            elif subcmd == "maestro":
+            elif subcmd == "maestro" or subcmd == "6":
                 if MAESTRO_ACTUAL:
                     print(f"Maestro actual: {MAESTRO_ACTUAL}")
                 else:
