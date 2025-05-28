@@ -1,4 +1,4 @@
-import socket
+¿import socket
 import threading
 import time
 import json
@@ -19,8 +19,23 @@ INTERVALO_DISCOVERY = 5
 INTERVALO_VERIFICACION_MAESTRO = 10
 NODOS_DESCUBIERTOS = {} # {ip: {"puerto": int, "sucursal": str}}
 SOY_MAESTRO = False
-IP_LOCAL = socket.gethostbyname(socket.gethostname())
+def get_local_ip():
+    try:
+        # Se conecta a una dirección externa pero no envía datos
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip_local = s.getsockname()[0]
+        s.close()
+        return ip_local
+    except Exception as e:
+        print(f"Error al obtener la IP: {e}")
+        return None
+
+IP_LOCAL = get_local_ip()
 MAESTRO_ACTUAL = None
+
+OPERACION_ACTUAL = 0 # empezamos el contador en 0 en cada nodo
+OPERACION_TIMESTAMP = time.time() # timestamp de la última operación
 
 SUCURSAL = random.choice(lista_sucursales) + " " + str(random.randint(1, 10))
 
@@ -146,7 +161,8 @@ def escuchar_broadcast():
                             # Reiniciar el tiempo de vida al recibir un nuevo broadcast
                             start_time = time.time()
                             # Decidir maestro por IP mayor
-                            ips = list(NODOS_DESCUBIERTOS.keys()) + [IP_LOCAL]
+                            ips = list(NODOS_DESCUBIERTOS.keys())
+                            ips.append(IP_LOCAL)
                             nuevo_maestro = max(ips)
                             if IP_LOCAL == nuevo_maestro:
                                 SOY_MAESTRO = True
@@ -311,18 +327,35 @@ def atender_conexion(conn, addr):
             if not nodo_con_articulo:
                 print(f"[MAESTRO] Ningún nodo tiene el artículo {id_art} (Serie: {serie_art}). Me lo adjudico.")
                 with lock_inventario:
+                    cantidad_anterior = inventario.get((id_art, serie_art), {}).get("cantidad", 0)
+                    nombre_anterior = inventario.get((id_art, serie_art), {}).get("nombre")
+                    coleccion_inventario.find_one_and_replace(
+                        {"id": int(id_art), "serie": int(serie_art)},
+                        {
+                            "id": int(id_art),
+                            "serie": int(serie_art),
+                            "nombre": nombre_anterior,
+                            "cantidad": int(cantidad_anterior),
+                            "ubicacion": SUCURSAL
+                        },
+                        upsert=True
+                    )
                     inventario[(id_art, serie_art)] = {
                         "id": id_art,
                         "serie": serie_art,
-                        "nombre": f"Desconocido {id_art}",
-                        "cantidad": 1,
+                        "nombre": nombre_anterior,
+                        "cantidad": cantidad_anterior,
                         "ubicacion": SUCURSAL
                     }
-                    coleccion_inventario.insert_one({
-                        "id": int(id_art),
-                        "serie": int(serie_art),
-                        "nombre": f"Desconocido {id_art}",
-                        "cantidad": 1,
+
+                    # ahora actualizamos el registro en todos
+                    enviar_a_todos({
+                        "tipo": "articulo_agregado",
+                        "origen": (IP_LOCAL, PUERTO_NODO),  # para replicar el origen de la adición
+                        "id_articulo": id_art,
+                        "serie_articulo": serie_art,
+                        "nombre_articulo": nombre_anterior,
+                        "cantidad": cantidad_anterior,
                         "ubicacion": SUCURSAL
                     })
 
@@ -336,6 +369,7 @@ def atender_conexion(conn, addr):
                     s.connect((ip_destino, puerto_destino))
                     s.sendall(json.dumps({
                         "tipo": "compra",
+                        "origen": mensaje["origen"],  # para replicar el origen de la compra
                         "id_articulo": id_art,
                         "serie_articulo": serie_art,
                         "id_cliente": id_cli,
@@ -353,6 +387,7 @@ def atender_conexion(conn, addr):
             # Propagar a todos los nodos que la compra fue realizada
             enviar_a_todos({
                 "tipo": "compra_realizada",
+                "origen": (IP_LOCAL, PUERTO_NODO),
                 "id_articulo": id_art,
                 "serie_articulo": serie_art,
                 "id_cliente": id_cli,
@@ -372,13 +407,21 @@ def atender_conexion(conn, addr):
 
             with lock_inventario:
                 inventario[(id_art, serie_art)]['cantidad'] = cantidad
-                try:
+                preexistente = coleccion_inventario.find_one({"id": int(id_art), "serie": int(serie_art)})
+                max_id_art = coleccion_inventario.find_one({}, sort=[("id", -1)]) # aquí buscamos el id más alto
+                # acutalizamos el id del artículo si es menor al más alto que tenemos
+                if preexistente and preexistente["id"] < max_id_art["id"]:
+                    id_art = max_id_art["id"] + 1
+                    inventario[(id_art, serie_art)]["id"] = id_art
+                    mensaje["id_articulo"] = id_art
+                    print(f"[INFO] Actualizando ID del artículo {serie_art} a {id_art} (antes era {preexistente['id']})")
+                if preexistente:
                     coleccion_inventario.find_one_and_replace(
                         {"id": int(id_art), "serie": int(serie_art)},
                         {"id": int(id_art), "nombre": nombre_art, "serie": int(serie_art), "cantidad": int(cantidad), "ubicacion": mensaje["ubicacion"]},
                         upsert=True
                     )
-                except Exception as e:
+                else:
                     coleccion_inventario.insert_one({
                         "id": int(id_art),
                         "nombre": nombre_art,
@@ -386,20 +429,37 @@ def atender_conexion(conn, addr):
                         "cantidad": int(cantidad),
                         "ubicacion": SUCURSAL
                     })
-                log_local(f"Artículo agregado: {id_art} (Serie: {serie_art}) (+{cantidad})")
-                print(f"[INVENTARIO] Agregado {cantidad} unidades de {id_art} (Serie: {serie_art})")
-        
+                log_local(f"Artículo {'cambiado' if preexistente else 'añadido'}: {id_art} (Serie: {serie_art}) (+{cantidad})")
+                print(f"[INVENTARIO] {'Cambiado' if preexistente else 'Añadido'} {cantidad} unidades de {id_art} (Serie: {serie_art}) en {mensaje['ubicacion']}")
+                # respondemos de hecho
+                conn.sendall(b"ok")  # Al final del bloque de agregar artículo
+
         elif tipo == "cliente_update":
             id_cli = mensaje["id_cliente"]
             nombre = mensaje["nombre"]
             correo = mensaje.get("email", "")
             telefono = mensaje.get("telefono", "")
             
-            clientes[id_cli] = {
-                "nombre": nombre,
-                "email": correo,
-                "telefono": telefono
-            }
+            preexistente = coleccion_clientes.find_one({"id": int(id_cli)})
+
+            if preexistente:
+                # Si el cliente ya existe, actualizamos sus datos
+                log_local(f"Actualizando cliente: {id_cli} -> {nombre}")
+                print(f"[CLIENTE] Actualizando: {id_cli} -> {nombre}")
+                coleccion_clientes.find_one_and_replace(
+                    {"id": int(id_cli)},
+                    {"id": int(id_cli), "nombre": nombre, "email": correo, "telefono": telefono},
+                    upsert=True
+                )
+                clientes[id_cli] = {
+                    "nombre": nombre,
+                    "email": correo,
+                    "telefono": telefono
+                }
+                conn.sendall(b"ok")  # Al final del bloque de actualización de cliente
+                return
+            
+            # Actualizamos el cliente en la base de datos
             coleccion_clientes.update_one({"id": int(id_cli)}, {
                 "$set": {
                     "nombre": nombre,
@@ -407,13 +467,24 @@ def atender_conexion(conn, addr):
                     "telefono": telefono
                 }
             }, upsert=True)
+            # Actualizamos el registro local
+            clientes[id_cli] = {
+                "nombre": nombre,
+                "email": correo,
+                "telefono": telefono
+            }
             log_local(f"Cliente actualizado: {id_cli} -> {nombre}")
             print(f"[CLIENTE] Actualizado: {id_cli} -> {nombre}")
+            conn.sendall(b"ok")  # Al final del bloque de actualización de cliente
 
         elif tipo == "solicitar_estado":
             estado = {
                 "inventario": list(coleccion_inventario.find({}, {"id": 0})),
-                "clientes": list(coleccion_clientes.find({}, {"id": 0}))
+                "clientes": list(coleccion_clientes.find({}, {"id": 0})),
+                "guias": list(coleccion_guias.find({}, {"id": 0})),
+                "sucursal": SUCURSAL,
+                'operacion': OPERACION_ACTUAL,
+                'timestamp': OPERACION_TIMESTAMP,
             }
             conn.sendall(json.dumps(estado).encode())
 
@@ -433,6 +504,7 @@ def atender_conexion(conn, addr):
         
         elif tipo == "articulo_agregado":
             id_art = mensaje["id_articulo"]
+            origen = mensaje['origen']
             serie_art = mensaje["serie_articulo"]
             nombre_art = mensaje["nombre_articulo"]
             cantidad = mensaje["cantidad"]
@@ -446,17 +518,14 @@ def atender_conexion(conn, addr):
                     "cantidad": cantidad,
                     "ubicacion": ubicacion
                 }
-                coleccion_inventario.find_one_and_update(
+                preexistente = coleccion_inventario.find_one({"id": int(id_art), "serie": int(serie_art)})
+                coleccion_inventario.find_one_and_replace(
                     {"id": int(id_art), "serie": int(serie_art)},
-                    {"$set": {
-                        "cantidad": int(cantidad),
-                        "ubicacion": ubicacion,
-                        "nombre": nombre_art},
-                    },
+                    {"id": int(id_art), "nombre": nombre_art, "serie": int(serie_art), "cantidad": int(cantidad), "ubicacion": ubicacion},
                     upsert=True
                 )
-                log_local(f"Artículo agregado: {id_art} (Serie: {serie_art}) (+{cantidad})")
-                print(f"[INVENTARIO] Agregado {cantidad} unidades de {id_art} (Serie: {serie_art}) en {ubicacion}")
+                log_local(f"Artículo {'actualizado' if preexistente else 'agregado'}: {id_art} (Serie: {serie_art}) (+{cantidad})")
+                print(f"[INVENTARIO] {'Actualizado' if preexistente else 'Agregado'} {cantidad} unidades de {id_art} (Serie: {serie_art}) en {ubicacion}")
         elif tipo == "cliente_actualizado":
             id_cli = mensaje["id_cliente"]
             nombre = mensaje["nombre"]
@@ -506,7 +575,8 @@ def atender_conexion(conn, addr):
                     print(f"[ERROR] Artículo {id_art} (Serie: {serie_art}) no encontrado en el inventario local.")
                     # pedimos consenso para actualizar el inventario
                     enviar_a_todos({
-                        "tipo": "solicitar_estado"
+                        "tipo": "solicitar_estado",
+                        "origen": (IP_LOCAL, PUERTO_NODO),
                     })
             # registrar guía de envío
             guia_codigo = f"{id_art}-{serie_art}-{ubicacion}-{id_cli}"
@@ -577,6 +647,7 @@ def enviar_a_maestro(mensaje):
                     # actualizamos a todos los nodos
                     enviar_a_todos({
                         "tipo": "compra_realizada",
+                        "origen": mensaje["origen"], # para replicar el origen de la compra
                         "id_articulo": mensaje["id_articulo"],
                         "serie_articulo": mensaje["serie_articulo"],
                         "id_cliente": mensaje["id_cliente"],
@@ -603,6 +674,7 @@ def enviar_a_maestro(mensaje):
                 log_local(f"Artículo agregado: {mensaje['id_articulo']} (Serie: {mensaje['serie_articulo']}) (+{mensaje['cantidad']})")
                 enviar_a_todos({
                     "tipo": "articulo_agregado",
+                    "origen": mensaje["origen"],  # para replicar el origen de la adición
                     "id_articulo": mensaje["id_articulo"],
                     "serie_articulo": mensaje["serie_articulo"],
                     "nombre_articulo": mensaje["nombre_articulo"],
@@ -630,13 +702,12 @@ def enviar_a_maestro(mensaje):
             log_local(f"Cliente actualizado: {id_cli} -> {nombre}")
             enviar_a_todos({
                 "tipo": "cliente_actualizado",
+                "origen": mensaje["origen"],  # para replicar el origen de la actualización
                 "id_cliente": id_cli,
                 "nombre": nombre,
                 "email": correo,
                 "telefono": telefono
             })
-
-
 
 # =====================
 # Comparación de consenso (generales bizantinos)
@@ -645,44 +716,55 @@ def comparar_datos():
     time.sleep(20)  # Esperar a que se estabilicen los nodos
     if not SOY_MAESTRO:
         return
+
     print("[CONSENSO] Comparando datos entre nodos")
     registros = {}
+
     for ip, port in NODOS_DESCUBIERTOS.items():
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.connect((ip, port))
                 s.sendall(json.dumps({"tipo": "solicitar_estado"}).encode())
                 data = s.recv(8192)
-                registros[ip] = json.loads(data.decode())
-        except:
+                estado = json.loads(data.decode())
+                registros[ip] = estado
+        except Exception as e:
+            print(f"[CONSENSO] Error con nodo {ip}:{port} -> {e}")
             continue
-    votos = {}
-    for ip, estado in registros.items():
-        inventario = tuple(sorted((k, v) for k, v in estado["inventario"].items()))
-        clientes = tuple(sorted((k, v) for k, v in estado["clientes"].items()))
-        votos[(inventario, clientes)] = votos.get((inventario, clientes), 0) + 1
-    # Encontrar el estado más votado
-    try:
-        estado_mas_votado = max(votos, key=votos.get)
-        inventario, clientes = estado_mas_votado
-        print("[CONSENSO] Estado más votado encontrado")
-        # Forzar el estado en la base de datos
-        coleccion_inventario.delete_many({})
-        coleccion_inventario.insert_many([{"id": k[0], "serie": k[1], "nombre": v["nombre"], "cantidad": v["cantidad"], "ubicacion": v["ubicacion"]} for k, v in inventario])
-        coleccion_clientes.delete_many({})
-        coleccion_clientes.insert_many([{"id": k[0], "nombre": v["nombre"], "email": v["email"], "telefono": v["telefono"]} for k, v in clientes])
-        # Notificar a todos los nodos
-        msg = {
-            "origen": (IP_LOCAL, PUERTO_NODO),
-            "tipo": "forzar_estado",
-            "estado": {
-                "inventario": [{"id": k[0], "serie": k[1], "nombre": v["nombre"], "cantidad": v["cantidad"], "ubicacion": v["ubicacion"]} for k, v in inventario],
-                "clientes": [{"id": k[0], "nombre": v["nombre"], "email": v["email"], "telefono": v["telefono"]} for k, v in clientes]
-            }
-        }
-    except ValueError:
+
+    if not registros:
         print("[CONSENSO] No se encontraron estados válidos para consenso")
         return
+
+    def convertir_a_epoch(timestamp_str):
+        try:
+            # Formato ISO 8601 sin zona horaria: '2025-05-28T15:34:12'
+            t = time.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S")
+            return time.mktime(t)
+        except:
+            return 0  # Si falla, asumimos un timestamp muy antiguo
+
+    # Determinar el mejor estado por operacion y timestamp en epoch
+    def clave_prioridad(estado):
+        op = int(estado.get("operacion", 0))
+        ts = convertir_a_epoch(estado.get("timestamp", "1970-01-01T00:00:00"))
+        return (op, ts)
+
+    mejor_estado = max(registros.values(), key=clave_prioridad)
+
+    print("[CONSENSO] Nodo con estado más confiable seleccionado")
+
+    # Aplicar el estado consensuado
+    coleccion_inventario.delete_many({})
+    coleccion_inventario.insert_many(mejor_estado.get("inventario", []))
+
+    coleccion_clientes.delete_many({})
+    coleccion_clientes.insert_many(mejor_estado.get("clientes", []))
+
+    coleccion_guias.delete_many({})
+    coleccion_guias.insert_many(mejor_estado.get("guias", []))
+
+    print("[CONSENSO] Estado actualizado según nodo más confiable")
 
 # =====================
 # Interfaz de comandos
@@ -759,8 +841,10 @@ def interfaz():
                 cantidad = int(input("Cantidad: "))
                 msg = {
                     "tipo": "agregar_articulo", 
+                    "origen": (IP_LOCAL, PUERTO_NODO),
                     "nombre_articulo": nombre_art,
                     "serie_articulo": serie_art, 
+                    "id_articulo": str(len(inventario)),  # Generar ID único
                     "cantidad": cantidad, 
                     "ubicacion": SUCURSAL
                 }
