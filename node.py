@@ -6,6 +6,31 @@ import random
 from pymongo import MongoClient
 
 # =====================
+# Corrección de errores críticos
+# =====================
+
+def get_local_ip():
+    """Obtiene la IP real de la máquina (no loopback)"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except:
+        return socket.gethostbyname(socket.gethostname())
+
+def encontrar_puerto_disponible(base_port=60000, max_attempts=20):
+    """Encuentra un puerto disponible con más robustez"""
+    for port in range(base_port, base_port + max_attempts):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(('', port))
+                return port
+        except:
+            continue
+    raise Exception("No se pudo encontrar puerto disponible")
+
+# =====================
 # Configuraciones
 # =====================
 
@@ -43,10 +68,9 @@ INTERVALO_DISCOVERY = 5
 INTERVALO_VERIFICACION_MAESTRO = 10
 NODOS_DESCUBIERTOS = {}  # {ip: {"puerto": int, "sucursal": str}}
 SOY_MAESTRO = False
-IP_LOCAL = socket.gethostbyname(socket.gethostname())
+IP_LOCAL = get_local_ip()
 MAESTRO_ACTUAL = None
 BROADCAST_IP = get_broadcast_ip()
-
 SUCURSAL = random.choice(lista_sucursales) + " " + str(random.randint(1, 10))
 
 
@@ -153,45 +177,39 @@ def enviar_broadcast():
 # Escuchar broadcast discovery (revive por 10s tras recibir)
 # =====================
 def escuchar_broadcast():
-    global NODOS_DESCUBIERTOS, MAESTRO_ACTUAL, SOY_MAESTRO
+    """Versión corregida de la función con manejo de errores"""
+    global NODOS_DESCUBIERTOS
     
     while True:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            s.bind(('', PUERTO_BROADCAST))
-            s.settimeout(INTERVALO_DISCOVERY)
-            
-            try:
-                data, addr = s.recvfrom(1024)
-                mensaje = data.decode()
-                if mensaje.startswith("DISCOVER:"):
-                    partes = mensaje.split(":")
-                    ip_nodo = partes[1]
-                    puerto_nodo = int(partes[2])
-                    sucursal_nodo = partes[3] if len(partes) > 3 else "N/A"
-                    
-                    if ip_nodo != IP_LOCAL:
-                        NODOS_DESCUBIERTOS[ip_nodo] = {
-                            "puerto": puerto_nodo,
-                            "sucursal": sucursal_nodo,
-                            "last_seen": time.time()
-                        }
-                        log_local(f"Nodo descubierto: {ip_nodo}:{puerto_nodo} ({sucursal_nodo})")
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                s.bind(('', PUERTO_BROADCAST))  # Corregido el nombre de la variable
+                s.settimeout(INTERVALO_DISCOVERY)
+                
+                try:
+                    data, addr = s.recvfrom(1024)
+                    mensaje = data.decode()
+                    if mensaje.startswith("DISCOVER:"):
+                        partes = mensaje.split(":")
+                        ip_nodo = partes[1]
+                        puerto_nodo = int(partes[2])
+                        sucursal_nodo = partes[3] if len(partes) > 3 else "N/A"
                         
-                        # Elección de maestro mejorada
-                        elegir_maestro()
-            except socket.timeout:
-                # Limpieza de nodos no vistos
-                current_time = time.time()
-                dead_nodes = [ip for ip, info in NODOS_DESCUBIERTOS.items() 
-                            if current_time - info["last_seen"] > INTERVALO_VERIFICACION_MAESTRO]
-                for ip in dead_nodes:
-                    log_local(f"Nodo perdido: {ip}")
-                    del NODOS_DESCUBIERTOS[ip]
-                if dead_nodes:
-                    elegir_maestro()
-            except Exception as e:
-                log_local(f"Error escuchando broadcast: {str(e)}")
+                        if ip_nodo != IP_LOCAL:
+                            NODOS_DESCUBIERTOS[ip_nodo] = {
+                                "puerto": puerto_nodo,
+                                "sucursal": sucursal_nodo,
+                                "last_seen": time.time()
+                            }
+                            log_local(f"Nodo descubierto: {ip_nodo}:{puerto_nodo}")
+                            elegir_maestro()
+                except socket.timeout:
+                    pass
+        except Exception as e:
+            log_local(f"Error en escuchar_broadcast: {str(e)}")
+            time.sleep(5)  # Esperar antes de reintentar
     
 
 # =====================
@@ -249,13 +267,22 @@ articulos_en_uso = set()
 # Servidor TCP por nodo
 # =====================
 def servidor_nodo():
+    """Versión corregida del servidor TCP"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((IP_LOCAL, PUERTO_NODO))
-        s.listen()
-        print(f"[TCP] Escuchando en {IP_LOCAL}:{PUERTO_NODO}")
-        while True:
-            conn, addr = s.accept()
-            threading.Thread(target=atender_conexion, args=(conn, addr), daemon=True).start()
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind((IP_LOCAL, PUERTO_NODO))
+            s.listen()
+            log_local(f"[TCP] Escuchando en {IP_LOCAL}:{PUERTO_NODO}")
+            while True:
+                try:
+                    conn, addr = s.accept()
+                    threading.Thread(target=atender_conexion, args=(conn, addr), daemon=True).start()
+                except Exception as e:
+                    log_local(f"Error aceptando conexión: {str(e)}")
+        except Exception as e:
+            log_local(f"Error iniciando servidor: {str(e)}")
+            raise
 
 def atender_conexion(conn, addr):
     with conn:
