@@ -79,7 +79,7 @@ lock_inventario = threading.Lock()
 for item in coleccion_inventario.find():
     clave = (str(item["id"]), str(item["serie"]))
     inventario[clave] = {
-        "id": item["id"],
+        "id": item.get["id"],
         "serie": item["serie"],
         "nombre": item["nombre"],
         "cantidad": item["cantidad"],
