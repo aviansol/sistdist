@@ -233,6 +233,7 @@ def servidor_nodo():
             threading.Thread(target=atender_conexion, args=(conn, addr), daemon=True).start()
 
 def atender_conexion(conn, addr):
+    global OPERACION_ACTUAL, OPERACION_TIMESTAMP, SOY_MAESTRO, MAESTRO_ACTUAL, NODOS_DESCUBIERTOS, inventario, coleccion_inventario, coleccion_clientes, coleccion_guias, guias, clientes
     with conn:
         data = conn.recv(8192)
         if not data:
