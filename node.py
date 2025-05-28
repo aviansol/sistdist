@@ -76,33 +76,47 @@ clientes = {}    # {id_cliente: nombre}
 guias = {}       # {codigo_guia: {"fecha_envio": str, "estado": str}}
 lock_inventario = threading.Lock()
 
+# Carga inventario a memoria con control de id y serie
 for item in coleccion_inventario.find():
-    if "id" not in item or "serie" not in item:
-        print(f"[WARN] Documento sin id o serie: {item}")
-        continue  # salta ese documento para evitar error
-    clave = (str(item["id"]), str(item["serie"]))
+    id_ = item.get("id")
+    if id_ is None:
+        id_ = str(item.get("_id"))
+    serie = item.get("serie")
+    if serie is None:
+        print(f"[WARN] Documento inventario sin serie: {item}")
+        continue
+    clave = (str(id_), str(serie))
     inventario[clave] = {
-        "id": item.get["id"],
-        "serie": item["serie"],
-        "nombre": item["nombre"],
-        "cantidad": item["cantidad"],
-        "ubicacion": item["ubicacion"],
+        "id": id_,
+        "serie": serie,
+        "nombre": item.get("nombre", "Sin nombre"),
+        "cantidad": item.get("cantidad", 0),
+        "ubicacion": item.get("ubicacion", "Desconocida"),
     }
 
+# Carga clientes a memoria con control de id
 for cliente in coleccion_clientes.find():
-    clientes[str(cliente["id"])] = {
-        "id": cliente["id"],
-        "nombre": cliente["nombre"],
-        "email": cliente["email"],
-        "telefono": cliente["telefono"]
+    id_cli = cliente.get("id")
+    if id_cli is None:
+        id_cli = str(cliente.get("_id"))
+    clientes[str(id_cli)] = {
+        "id": id_cli,
+        "nombre": cliente.get("nombre", "Sin nombre"),
+        "email": cliente.get("email", ""),
+        "telefono": cliente.get("telefono", ""),
     }
 
+# Carga guías a memoria con control de id
 for guia in coleccion_guias.find():
-    guias[str(guia["id"])] = {
-        "codigo": guia["codigo"],
-        "fecha_envio": guia["fecha_envio"],
-        "estado": guia["estado"]
+    id_guia = guia.get("id")
+    if id_guia is None:
+        id_guia = str(guia.get("_id"))
+    guias[str(id_guia)] = {
+        "codigo": guia.get("codigo", "Sin código"),
+        "fecha_envio": guia.get("fecha_envio", "Sin fecha"),
+        "estado": guia.get("estado", "Desconocido"),
     }
+
 
 # =====================
 # Broadcast discovery
