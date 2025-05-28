@@ -77,6 +77,9 @@ guias = {}       # {codigo_guia: {"fecha_envio": str, "estado": str}}
 lock_inventario = threading.Lock()
 
 for item in coleccion_inventario.find():
+    if "id" not in item or "serie" not in item:
+        print(f"[WARN] Documento sin id o serie: {item}")
+        continue  # salta ese documento para evitar error
     clave = (str(item["id"]), str(item["serie"]))
     inventario[clave] = {
         "id": item.get["id"],
