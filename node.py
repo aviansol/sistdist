@@ -210,7 +210,7 @@ def verificar_maestro():
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     s.settimeout(5)
-                    s.connect((MAESTRO_ACTUAL, PUERTO_NODO))
+                    s.connect((MAESTRO_ACTUAL, NODOS_DESCUBIERTOS[MAESTRO_ACTUAL]["puerto"]))
                     s.sendall(json.dumps({"tipo": "ping"}).encode())
                     s.recv(1024)
             except:
@@ -606,13 +606,14 @@ def enviar_a_todos(mensaje):
 
 def enviar_a_maestro(mensaje):
     global MAESTRO_ACTUAL
+    puerto_master = NODOS_DESCUBIERTOS.get(MAESTRO_ACTUAL, {}).get("puerto", PUERTO_NODO)
     if not SOY_MAESTRO and MAESTRO_ACTUAL:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.connect((MAESTRO_ACTUAL, PUERTO_NODO))
+                s.connect((MAESTRO_ACTUAL, puerto_master))
                 s.sendall(json.dumps(mensaje).encode())
         except:
-            print(f"[ERROR] No se pudo enviar al maestro {MAESTRO_ACTUAL}")
+            print(f"[ERROR] No se pudo enviar al maestro {MAESTRO_ACTUAL} sucursal {NODOS_DESCUBIERTOS[MAESTRO_ACTUAL]['sucursal']}")
     else:
         print("[INFO] Soy el maestro, no se envía al maestro")
         if( mensaje["tipo"] == "solicitar_compra"):
