@@ -35,7 +35,8 @@ IP_LOCAL = get_local_ip()
 MAESTRO_ACTUAL = None
 
 OPERACION_ACTUAL = 0 # empezamos el contador en 0 en cada nodo
-OPERACION_TIMESTAMP = time.time() # timestamp de la última operación
+OPERACION_TIMESTAMP = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+
 
 SUCURSAL = random.choice(lista_sucursales) + " " + str(random.randint(1, 10))
 
@@ -238,6 +239,15 @@ def atender_conexion(conn, addr):
             return
         mensaje = json.loads(data.decode())
         tipo = mensaje.get("tipo")
+
+        if tipo is None:
+            print("[ERROR] Mensaje sin tipo recibido")
+            conn.sendall(b"error")
+            return
+        else:
+            OPERACION_ACTUAL += 1
+            OPERACION_TIMESTAMP = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+
 
         if tipo == "ping":
             conn.sendall(b"pong")
@@ -500,13 +510,20 @@ def atender_conexion(conn, addr):
                 "clientes": list(coleccion_clientes.find({}, {"id": 0})),
                 "guias": list(coleccion_guias.find({}, {"id": 0})),
                 "sucursal": SUCURSAL,
-                'operacion': OPERACION_ACTUAL,
-                'timestamp': OPERACION_TIMESTAMP,
+                "operacion": int(OPERACION_ACTUAL),
+                "timestamp": OPERACION_TIMESTAMP,  # Asegúrate de que tenga formato ISO
             }
             conn.sendall(json.dumps(estado).encode())
 
         elif tipo == "forzar_estado":
+            OPERACION_ACTUAL = nuevo_estado.get("operacion", 0)
+            OPERACION_TIMESTAMP = nuevo_estado.get("timestamp", "1970-01-01T00:00:00")
+
             nuevo_estado = mensaje["estado"]
+            if not nuevo_estado or "inventario" not in nuevo_estado or "clientes" not in nuevo_estado:
+                print("[ERROR] Estado forzado inválido recibido")
+                conn.sendall(b"error")
+                return
             coleccion_inventario.delete_many({})
             coleccion_inventario.insert_many(nuevo_estado["inventario"])
             coleccion_clientes.delete_many({})
@@ -747,6 +764,11 @@ def comparar_datos():
                 s.sendall(json.dumps({"tipo": "solicitar_estado"}).encode())
                 data = s.recv(8192)
                 estado = json.loads(data.decode())
+                campos_requeridos = ["inventario", "clientes", "guias", "operacion", "timestamp"]
+                for campo in campos_requeridos:
+                    if campo not in estado:
+                        print(f"[CONSENSO] Nodo {ip} no tiene campo requerido: {campo}")
+                        continue
                 registros[ip] = estado
         except Exception as e:
             print(f"[CONSENSO] Error con nodo {ip}:{info} -> {e}")
@@ -771,8 +793,9 @@ def comparar_datos():
         return (op, ts)
 
     mejor_estado = max(registros.values(), key=clave_prioridad)
-
     print("[CONSENSO] Nodo con estado más confiable seleccionado")
+    mejor_ip = max(registros.items(), key=lambda item: clave_prioridad(item[1]))[0]
+    print(f"[CONSENSO] Nodo con mejor estado: {mejor_ip}")
 
     # Aplicar el estado consensuado
     coleccion_inventario.delete_many({})
@@ -785,6 +808,13 @@ def comparar_datos():
     coleccion_guias.insert_many(mejor_estado.get("guias", []))
 
     print("[CONSENSO] Estado actualizado según nodo más confiable")
+
+    enviar_a_todos({
+        "tipo": "forzar_estado",
+        "origen": [IP_LOCAL, PUERTO_NODO],
+        "estado": mejor_estado,
+        "fecha_envio": time.strftime("%Y-%m-%d %H:%M:%S")
+    })
 
 # =====================
 # Interfaz de comandos
