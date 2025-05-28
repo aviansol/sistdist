@@ -353,7 +353,6 @@ def atender_conexion(conn, addr):
             # Propagar a todos los nodos que la compra fue realizada
             enviar_a_todos({
                 "tipo": "compra_realizada",
-                "origen": (IP_LOCAL, PUERTO_NODO),
                 "id_articulo": id_art,
                 "serie_articulo": serie_art,
                 "id_cliente": id_cli,
@@ -507,8 +506,7 @@ def atender_conexion(conn, addr):
                     print(f"[ERROR] Artículo {id_art} (Serie: {serie_art}) no encontrado en el inventario local.")
                     # pedimos consenso para actualizar el inventario
                     enviar_a_todos({
-                        "tipo": "solicitar_estado",
-                        "origen": (IP_LOCAL, PUERTO_NODO),
+                        "tipo": "solicitar_estado"
                     })
             # registrar guía de envío
             guia_codigo = f"{id_art}-{serie_art}-{ubicacion}-{id_cli}"
@@ -579,7 +577,6 @@ def enviar_a_maestro(mensaje):
                     # actualizamos a todos los nodos
                     enviar_a_todos({
                         "tipo": "compra_realizada",
-                        "origen": mensaje["origen"], # para replicar el origen de la compra
                         "id_articulo": mensaje["id_articulo"],
                         "serie_articulo": mensaje["serie_articulo"],
                         "id_cliente": mensaje["id_cliente"],
@@ -606,7 +603,6 @@ def enviar_a_maestro(mensaje):
                 log_local(f"Artículo agregado: {mensaje['id_articulo']} (Serie: {mensaje['serie_articulo']}) (+{mensaje['cantidad']})")
                 enviar_a_todos({
                     "tipo": "articulo_agregado",
-                    "origen": mensaje["origen"],  # para replicar el origen de la adición
                     "id_articulo": mensaje["id_articulo"],
                     "serie_articulo": mensaje["serie_articulo"],
                     "nombre_articulo": mensaje["nombre_articulo"],
@@ -634,7 +630,6 @@ def enviar_a_maestro(mensaje):
             log_local(f"Cliente actualizado: {id_cli} -> {nombre}")
             enviar_a_todos({
                 "tipo": "cliente_actualizado",
-                "origen": mensaje["origen"],  # para replicar el origen de la actualización
                 "id_cliente": id_cli,
                 "nombre": nombre,
                 "email": correo,
@@ -678,6 +673,7 @@ def comparar_datos():
         coleccion_clientes.insert_many([{"id": k[0], "nombre": v["nombre"], "email": v["email"], "telefono": v["telefono"]} for k, v in clientes])
         # Notificar a todos los nodos
         msg = {
+            "origen": (IP_LOCAL, PUERTO_NODO),
             "tipo": "forzar_estado",
             "estado": {
                 "inventario": [{"id": k[0], "serie": k[1], "nombre": v["nombre"], "cantidad": v["cantidad"], "ubicacion": v["ubicacion"]} for k, v in inventario],
