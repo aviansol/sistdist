@@ -1,0 +1,388 @@
+{
+    "inventario": [
+        {
+            "id": 0,
+            "nombre": "Tarjeta gráfica RTX 4090",
+            "serie": "89",
+            "cantidad": 15,
+            "ubicacion": "CDMX 1"
+        },
+        {
+            "id": 1,
+            "nombre": "Monitor 8K HDR",
+            "serie": "90",
+            "cantidad": 10,
+            "ubicacion": "CDMX 2"
+        },
+        {
+            "id": 2,
+            "nombre": "Teclado mecánico RGB",
+            "serie": "91",
+            "cantidad": 25,
+            "ubicacion": "GDL 3"
+        },
+        {
+            "id": 3,
+            "nombre": "Mouse gaming inalámbrico",
+            "serie": "92",
+            "cantidad": 30,
+            "ubicacion": "CDMX 1"
+        },
+        {
+            "id": 4,
+            "nombre": "SSD NVMe 2TB",
+            "serie": "93",
+            "cantidad": 20,
+            "ubicacion": "CDMX 2"
+        },
+        {
+            "id": 5,
+            "nombre": "Procesador Intel i9-14900K",
+            "serie": "94",
+            "cantidad": 10,
+            "ubicacion": "CDMX 1"
+        },
+        {
+            "id": 6,
+            "nombre": "Placa base ASUS ROG",
+            "serie": "95",
+            "cantidad": 5,
+            "ubicacion": "GDL 3"
+        },
+        {
+            "id": 7,
+            "nombre": "Memoria RAM DDR5 32GB",
+            "serie": "96",
+            "cantidad": 18,
+            "ubicacion": "CDMX 2"
+        },
+        {
+            "id": 8,
+            "nombre": "Fuente de poder 850W",
+            "serie": "97",
+            "cantidad": 12,
+            "ubicacion": "CDMX 1"
+        },
+        {
+            "id": 9,
+            "nombre": "Refrigeración líquida Corsair",
+            "serie": "98",
+            "cantidad": 7,
+            "ubicacion": "GDL 3"
+        },
+        {
+            "id": 10,
+            "nombre": "Router WiFi 6",
+            "serie": "99",
+            "cantidad": 9,
+            "ubicacion": "CDMX 1"
+        },
+        {
+            "id": 11,
+            "nombre": "Laptop ultradelgada",
+            "serie": "10",
+            "cantidad": 4,
+            "ubicacion": "CDMX 2"
+        },
+        {
+            "id": 12,
+            "nombre": "Pantalla OLED 4K",
+            "serie": "1",
+            "cantidad": 6,
+            "ubicacion": "GDL 3"
+        },
+        {
+            "id": 13,
+            "nombre": "Tablet Android 12",
+            "serie": "2",
+            "cantidad": 13,
+            "ubicacion": "CDMX 1"
+        },
+        {
+            "id": 14,
+            "nombre": "Cámara web 1080p",
+            "serie": "3",
+            "cantidad": 11,
+            "ubicacion": "CDMX 2"
+        },
+        {
+            "id": 15,
+            "nombre": "Auriculares inalámbricos",
+            "serie": "4",
+            "cantidad": 14,
+            "ubicacion": "GDL 3"
+        },
+        {
+            "id": 16,
+            "nombre": "Controlador Xbox Elite",
+            "serie": "5",
+            "cantidad": 8,
+            "ubicacion": "CDMX 1"
+        },
+        {
+            "id": 17,
+            "nombre": "Impresora multifunción",
+            "serie": "6",
+            "cantidad": 5,
+            "ubicacion": "CDMX 2"
+        },
+        {
+            "id": 18,
+            "nombre": "Adaptador USB-C a HDMI",
+            "serie": "7",
+            "cantidad": 16,
+            "ubicacion": "GDL 3"
+        },
+        {
+            "id": 19,
+            "nombre": "Disco duro externo 4TB",
+            "serie": "8",
+            "cantidad": 20,
+            "ubicacion": "CDMX 1"
+        }
+    ],
+    "clientes": [
+        {
+            "id": 0,
+            "nombre": "Fernando García",
+            "email": "fernando@example.com",
+            "telefono": "555-1234"
+        },
+        {
+            "id": 1,
+            "nombre": "Ana López",
+            "email": "ana@example.com",
+            "telefono": "555-5678"
+        },
+        {
+            "id": 2,
+            "nombre": "Carlos Rodríguez",
+            "email": "carlos@example.com",
+            "telefono": "555-9101"
+        },
+        {
+            "id": 3,
+            "nombre": "María Fernández",
+            "email": "maria@example.com",
+            "telefono": "555-1122"
+        },
+        {
+            "id": 4,
+            "nombre": "Javier Martín",
+            "email": "javier@example.com",
+            "telefono": "555-3344"
+        },
+        {
+            "id": 5,
+            "nombre": "Elena Torres",
+            "email": "elena@example.com",
+            "telefono": "555-4433"
+        },
+        {
+            "id": 6,
+            "nombre": "Luis Castro",
+            "email": "luis@example.com",
+            "telefono": "555-6677"
+        },
+        {
+            "id": 7,
+            "nombre": "Sofía Méndez",
+            "email": "sofia@example.com",
+            "telefono": "555-7788"
+        },
+        {
+            "id": 8,
+            "nombre": "Raúl Sánchez",
+            "email": "raul@example.com",
+            "telefono": "555-8899"
+        },
+        {
+            "id": 9,
+            "nombre": "Gloria Pérez",
+            "email": "gloria@example.com",
+            "telefono": "555-9900"
+        },
+        {
+            "id": 10,
+            "nombre": "Eduardo Romero",
+            "email": "eduardo@example.com",
+            "telefono": "555-2233"
+        },
+        {
+            "id": 11,
+            "nombre": "Marta Jiménez",
+            "email": "marta@example.com",
+            "telefono": "555-4455"
+        },
+        {
+            "id": 12,
+            "nombre": "Pablo Herrera",
+            "email": "pablo@example.com",
+            "telefono": "555-6678"
+        },
+        {
+            "id": 13,
+            "nombre": "Andrea Silva",
+            "email": "andrea@example.com",
+            "telefono": "555-8900"
+        },
+        {
+            "id": 14,
+            "nombre": "Gabriel Díaz",
+            "email": "gabriel@example.com",
+            "telefono": "555-3345"
+        },
+        {
+            "id": 15,
+            "nombre": "Paula Vázquez",
+            "email": "paula@example.com",
+            "telefono": "555-5567"
+        },
+        {
+            "id": 16,
+            "nombre": "Víctor Morales",
+            "email": "victor@example.com",
+            "telefono": "555-7789"
+        },
+        {
+            "id": 17,
+            "nombre": "Isabel Castillo",
+            "email": "isabel@example.com",
+            "telefono": "555-9922"
+        },
+        {
+            "id": 18,
+            "nombre": "Ricardo González",
+            "email": "ricardo@example.com",
+            "telefono": "555-1133"
+        },
+        {
+            "id": 19,
+            "nombre": "Sandra Ruiz",
+            "email": "sandra@example.com",
+            "telefono": "555-3346"
+        }
+    ],
+    "guias": [
+        {
+            "id": 0,
+            "codigo": "0-89-CDMX 3-10",
+            "fecha_envio": "2025-05-25",
+            "estado": "En tránsito"
+        },
+        {
+            "id": 1,
+            "codigo": "SSD2TB-90-MTY-11",
+            "fecha_envio": "2025-05-22",
+            "estado": "Entregado"
+        },
+        {
+            "id": 2,
+            "codigo": "MouseW-91-GDL-12",
+            "fecha_envio": "2025-05-23",
+            "estado": "Pendiente"
+        },
+        {
+            "id": 3,
+            "codigo": "Monitor8K-92-CDMX-101",
+            "fecha_envio": "2025-05-24",
+            "estado": "En tránsito"
+        },
+        {
+            "id": 4,
+            "codigo": "TecladoRGB-93-MTY-102",
+            "fecha_envio": "2025-05-21",
+            "estado": "Entregado"
+        },
+        {
+            "id": 5,
+            "codigo": "Fuente850W-94-GDL-104",
+            "fecha_envio": "2025-05-20",
+            "estado": "En preparación"
+        },
+        {
+            "id": 6,
+            "codigo": "LaptopThin-95-CDMX-105",
+            "fecha_envio": "2025-05-19",
+            "estado": "Entregado"
+        },
+        {
+            "id": 7,
+            "codigo": "PantallaOLED-96-MTY-106",
+            "fecha_envio": "2025-05-18",
+            "estado": "Pendiente"
+        },
+        {
+            "id": 8,
+            "codigo": "TabletA12-97-GDL-107",
+            "fecha_envio": "2025-05-17",
+            "estado": "En tránsito"
+        },
+        {
+            "id": 9,
+            "codigo": "CamaraWeb-98-CDMX-108",
+            "fecha_envio": "2025-05-16",
+            "estado": "Entregado"
+        },
+        {
+            "id": 10,
+            "codigo": "AuricularesW-99-MTY-109",
+            "fecha_envio": "2025-05-15",
+            "estado": "Pendiente"
+        },
+        {
+            "id": 11,
+            "codigo": "ControlXbox-00-GDL-110",
+            "fecha_envio": "2025-05-14",
+            "estado": "En preparación"
+        },
+        {
+            "id": 12,
+            "codigo": "ImpresoraMF-01-CDMX-111",
+            "fecha_envio": "2025-05-13",
+            "estado": "En tránsito"
+        },
+        {
+            "id": 13,
+            "codigo": "AdaptadorHDMI-02-MTY-112",
+            "fecha_envio": "2025-05-12",
+            "estado": "Entregado"
+        },
+        {
+            "id": 14,
+            "codigo": "DiscoDuro4TB-03-GDL-113",
+            "fecha_envio": "2025-05-11",
+            "estado": "Pendiente"
+        },
+        {
+            "id": 15,
+            "codigo": "ProcesadorI9-04-CDMX-114",
+            "fecha_envio": "2025-05-10",
+            "estado": "En preparación"
+        },
+        {
+            "id": 16,
+            "codigo": "PlacaASUS-05-MTY-115",
+            "fecha_envio": "2025-05-09",
+            "estado": "En tránsito"
+        },
+        {
+            "id": 17,
+            "codigo": "RAMDDR5-06-GDL-116",
+            "fecha_envio": "2025-05-08",
+            "estado": "Entregado"
+        },
+        {
+            "id": 18,
+            "codigo": "RefrigeracionCorsair-07-CDMX-117",
+            "fecha_envio": "2025-05-07",
+            "estado": "Pendiente"
+        },
+        {
+            "id": 19,
+            "codigo": "RouterWiFi6-08-MTY-118",
+            "fecha_envio": "2025-05-06",
+            "estado": "En tránsito"
+        }
+    ]
+}
