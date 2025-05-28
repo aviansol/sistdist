@@ -351,11 +351,12 @@ def atender_conexion(conn, addr):
                     # ahora actualizamos el registro en todos
                     enviar_a_todos({
                         "tipo": "articulo_agregado",
-                        "origen": (IP_LOCAL, PUERTO_NODO),  # para replicar el origen de la adición
+                        "origen": [IP_LOCAL, PUERTO_NODO],  # para replicar el origen de la adición
                         "id_articulo": id_art,
                         "serie_articulo": serie_art,
                         "nombre_articulo": nombre_anterior,
                         "cantidad": cantidad_anterior,
+                        "fecha_envio": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "ubicacion": SUCURSAL
                     })
 
@@ -373,6 +374,7 @@ def atender_conexion(conn, addr):
                         "id_articulo": id_art,
                         "serie_articulo": serie_art,
                         "id_cliente": id_cli,
+                        "fecha_envio": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "fecha": fecha
                     }).encode())
                     # Esperar confirmación
@@ -387,7 +389,7 @@ def atender_conexion(conn, addr):
             # Propagar a todos los nodos que la compra fue realizada
             enviar_a_todos({
                 "tipo": "compra_realizada",
-                "origen": (IP_LOCAL, PUERTO_NODO),
+                "origen": [IP_LOCAL, PUERTO_NODO],
                 "id_articulo": id_art,
                 "serie_articulo": serie_art,
                 "id_cliente": id_cli,
@@ -511,6 +513,12 @@ def atender_conexion(conn, addr):
             ubicacion = mensaje["ubicacion"]
 
             with lock_inventario:
+                preexistente = coleccion_inventario.find_one({"id": int(id_art), "serie": int(serie_art)})
+                coleccion_inventario.find_one_and_replace(
+                    {"id": int(id_art), "serie": int(serie_art)},
+                    {"id": int(id_art), "nombre": nombre_art, "serie": int(serie_art), "cantidad": int(cantidad), "ubicacion": ubicacion},
+                    upsert=True
+                )
                 inventario[(id_art, serie_art)] = {
                     "id": id_art,
                     "nombre": nombre_art,
@@ -518,12 +526,6 @@ def atender_conexion(conn, addr):
                     "cantidad": cantidad,
                     "ubicacion": ubicacion
                 }
-                preexistente = coleccion_inventario.find_one({"id": int(id_art), "serie": int(serie_art)})
-                coleccion_inventario.find_one_and_replace(
-                    {"id": int(id_art), "serie": int(serie_art)},
-                    {"id": int(id_art), "nombre": nombre_art, "serie": int(serie_art), "cantidad": int(cantidad), "ubicacion": ubicacion},
-                    upsert=True
-                )
                 log_local(f"Artículo {'actualizado' if preexistente else 'agregado'}: {id_art} (Serie: {serie_art}) (+{cantidad})")
                 print(f"[INVENTARIO] {'Actualizado' if preexistente else 'Agregado'} {cantidad} unidades de {id_art} (Serie: {serie_art}) en {ubicacion}")
         elif tipo == "cliente_actualizado":
@@ -576,7 +578,8 @@ def atender_conexion(conn, addr):
                     # pedimos consenso para actualizar el inventario
                     enviar_a_todos({
                         "tipo": "solicitar_estado",
-                        "origen": (IP_LOCAL, PUERTO_NODO),
+                        "origen": [IP_LOCAL, PUERTO_NODO],
+                        "fecha_envio": time.strftime("%Y-%m-%d %H:%M:%S")
                     })
             # registrar guía de envío
             guia_codigo = f"{id_art}-{serie_art}-{ubicacion}-{id_cli}"
@@ -588,7 +591,7 @@ def atender_conexion(conn, addr):
             })
 
 def notificar_nuevo_maestro():
-    msg = {"tipo": "nuevo_maestro", "ip": IP_LOCAL}
+    msg = {"tipo": "nuevo_maestro", "ip": IP_LOCAL, "origen": [IP_LOCAL, PUERTO_NODO], "fecha_envio": time.strftime("%Y-%m-%d %H:%M:%S")}
     enviar_a_todos(msg)
 
 # =====================
@@ -652,6 +655,7 @@ def enviar_a_maestro(mensaje):
                         "id_articulo": mensaje["id_articulo"],
                         "serie_articulo": mensaje["serie_articulo"],
                         "id_cliente": mensaje["id_cliente"],
+                        "fecha_envio": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "ubicacion": SUCURSAL
                     })
         elif( mensaje["tipo"] == "agregar_articulo"):
@@ -680,6 +684,7 @@ def enviar_a_maestro(mensaje):
                     "serie_articulo": mensaje["serie_articulo"],
                     "nombre_articulo": mensaje["nombre_articulo"],
                     "cantidad": mensaje["cantidad"],
+                    "fecha_envio": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "ubicacion": mensaje["ubicacion"]
                 })
         elif( mensaje["tipo"] == "cliente_update"):
@@ -707,6 +712,7 @@ def enviar_a_maestro(mensaje):
                 "id_cliente": id_cli,
                 "nombre": nombre,
                 "email": correo,
+                "fecha_envio": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "telefono": telefono
             })
 
@@ -842,12 +848,13 @@ def interfaz():
                 cantidad = int(input("Cantidad: "))
                 msg = {
                     "tipo": "agregar_articulo", 
-                    "origen": (IP_LOCAL, PUERTO_NODO),
+                    "origen": [IP_LOCAL, PUERTO_NODO],
                     "nombre_articulo": nombre_art,
                     "serie_articulo": serie_art, 
                     "id_articulo": str(len(inventario)),  # Generar ID único
                     "cantidad": cantidad, 
-                    "ubicacion": SUCURSAL
+                    "ubicacion": SUCURSAL,
+                    "fecha_envio": time.strftime("%Y-%m-%d %H:%M:%S")
                 }
                 enviar_a_maestro(msg)
                 
@@ -858,6 +865,8 @@ def interfaz():
                 
                 msg = {
                     "tipo": "cliente_update",
+                    "origen": [IP_LOCAL, PUERTO_NODO],
+                    "fecha_envio": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "nombre": nombre,
                     "email": correo,
                     "telefono": telefono
