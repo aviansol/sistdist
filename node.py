@@ -9,20 +9,46 @@ from pymongo import MongoClient
 # Configuraciones
 # =====================
 
+def get_broadcast_ip():
+    """Obtiene automáticamente la dirección de broadcast"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+        return '.'.join(local_ip.split('.')[:-1] + ['255'])
+    except:
+        return '<broadcast>'  # Fallback si no se puede determinar
+
+def encontrar_puerto_disponible():
+    """Encuentra un puerto disponible en el rango especificado"""
+    lista_puertos = list(range(60000, 60010))
+    random.shuffle(lista_puertos)  # Mezclar para evitar conflictos
+    for puerto in lista_puertos:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('', puerto))
+                return puerto
+        except:
+            continue
+    return None
+
 lista_sucursales = ["CDMX", "GDL", "MTY", "SLP", "PUE", "QRO", "TOL", "VER", "OAX", "CHI"]
-
-lista_puertos = [ x for x in range(60000, 60010)]
-
 PUERTO_BROADCAST = 50000
-PUERTO_NODO = random.choice(lista_puertos)
+PUERTO_NODO = encontrar_puerto_disponible()
+if PUERTO_NODO is None:
+    print("[ERROR] No hay puertos disponibles")
+    exit(1)
+
 INTERVALO_DISCOVERY = 5
 INTERVALO_VERIFICACION_MAESTRO = 10
-NODOS_DESCUBIERTOS = {} # {ip: {"puerto": int, "sucursal": str}}
+NODOS_DESCUBIERTOS = {}  # {ip: {"puerto": int, "sucursal": str}}
 SOY_MAESTRO = False
 IP_LOCAL = socket.gethostbyname(socket.gethostname())
 MAESTRO_ACTUAL = None
+BROADCAST_IP = get_broadcast_ip()
 
 SUCURSAL = random.choice(lista_sucursales) + " " + str(random.randint(1, 10))
+
 
 # =====================
 # Conexión a MongoDB local
@@ -106,64 +132,66 @@ for guia in coleccion_guias.find():
 # =====================
 def enviar_broadcast():
     global IP_LOCAL, PUERTO_NODO, SUCURSAL
-    tiempo_vida = 10  # segundos
+    tiempo_vida = 15  # Aumentado para mejor descubrimiento
     start_time = time.time()
+    
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         s.settimeout(1)
         while time.time() - start_time < tiempo_vida:
             mensaje = f"DISCOVER:{IP_LOCAL}:{PUERTO_NODO}:{SUCURSAL}"
-            s.sendto(mensaje.encode(), ('<broadcast>', PUERTO_BROADCAST))
-            time.sleep(1)
-    print("[INFO] Broadcast discovery enviado")
+            try:
+                s.sendto(mensaje.encode(), (BROADCAST_IP, PUERTO_BROADCAST))
+                log_local(f"Enviado broadcast a {BROADCAST_IP}:{PUERTO_BROADCAST}")
+            except Exception as e:
+                log_local(f"Error enviando broadcast: {str(e)}")
+            time.sleep(2)  # Intervalo aumentado para reducir congestión
+    log_local("Broadcast discovery completado")
+
 
 # =====================
 # Escuchar broadcast discovery (revive por 10s tras recibir)
 # =====================
 def escuchar_broadcast():
     global NODOS_DESCUBIERTOS, MAESTRO_ACTUAL, SOY_MAESTRO
-    tiempo_vida = 10  # segundos
+    
     while True:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             s.bind(('', PUERTO_BROADCAST))
-            s.settimeout(tiempo_vida)
-            start_time = time.time()
-            while time.time() - start_time < tiempo_vida:
-                try:
-                    data, addr = s.recvfrom(1024)
-                    mensaje = data.decode()
-                    if mensaje.startswith("DISCOVER:"):
-                        partes = mensaje.split(":")
-                        ip_nodo = partes[1]
-                        puerto_nodo = int(partes[2])
-                        sucursal_nodo = partes[3] if len(partes) > 3 else "N/A"
-                        if ip_nodo != IP_LOCAL:
-                            NODOS_DESCUBIERTOS[ip_nodo] = {
-                                "puerto": puerto_nodo,
-                                "sucursal": sucursal_nodo
-                            }
-                            # Reiniciar el tiempo de vida al recibir un nuevo broadcast
-                            start_time = time.time()
-                            # Decidir maestro por IP mayor
-                            ips = list(NODOS_DESCUBIERTOS.keys()) + [IP_LOCAL]
-                            nuevo_maestro = max(ips)
-                            if IP_LOCAL == nuevo_maestro:
-                                SOY_MAESTRO = True
-                                MAESTRO_ACTUAL = IP_LOCAL
-                                print(f"[INFO] Soy el nuevo nodo maestro (Sucursal: {SUCURSAL})")
-                                notificar_nuevo_maestro()
-                            else:
-                                SOY_MAESTRO = False
-                                MAESTRO_ACTUAL = nuevo_maestro
-                                print(f"[INFO] Nodo esclavo. Maestro: {MAESTRO_ACTUAL}")
-                except socket.timeout:
-                    break
-                except Exception:
-                    continue
-        break
-    print("[INFO] Descubierto por: ", [x["sucursal"] for x in NODOS_DESCUBIERTOS.values()])
-
+            s.settimeout(INTERVALO_DISCOVERY)
+            
+            try:
+                data, addr = s.recvfrom(1024)
+                mensaje = data.decode()
+                if mensaje.startswith("DISCOVER:"):
+                    partes = mensaje.split(":")
+                    ip_nodo = partes[1]
+                    puerto_nodo = int(partes[2])
+                    sucursal_nodo = partes[3] if len(partes) > 3 else "N/A"
+                    
+                    if ip_nodo != IP_LOCAL:
+                        NODOS_DESCUBIERTOS[ip_nodo] = {
+                            "puerto": puerto_nodo,
+                            "sucursal": sucursal_nodo,
+                            "last_seen": time.time()
+                        }
+                        log_local(f"Nodo descubierto: {ip_nodo}:{puerto_nodo} ({sucursal_nodo})")
+                        
+                        # Elección de maestro mejorada
+                        elegir_maestro()
+            except socket.timeout:
+                # Limpieza de nodos no vistos
+                current_time = time.time()
+                dead_nodes = [ip for ip, info in NODOS_DESCUBIERTOS.items() 
+                            if current_time - info["last_seen"] > INTERVALO_VERIFICACION_MAESTRO]
+                for ip in dead_nodes:
+                    log_local(f"Nodo perdido: {ip}")
+                    del NODOS_DESCUBIERTOS[ip]
+                if dead_nodes:
+                    elegir_maestro()
+            except Exception as e:
+                log_local(f"Error escuchando broadcast: {str(e)}")
     
 
 # =====================
@@ -171,17 +199,31 @@ def escuchar_broadcast():
 # =====================
 def elegir_maestro():
     global SOY_MAESTRO, MAESTRO_ACTUAL
-    todos = list(NODOS_DESCUBIERTOS.keys()) + [IP_LOCAL]
-    nuevo_maestro = max(todos)
-    if IP_LOCAL == nuevo_maestro:
+    
+    if not NODOS_DESCUBIERTOS:
         SOY_MAESTRO = True
         MAESTRO_ACTUAL = IP_LOCAL
-        print("[INFO] Soy el nuevo nodo maestro")
-        notificar_nuevo_maestro()
+        log_local("Soy el único nodo, me convierto en maestro")
+        return
+    
+    # Convertir IPs a tuplas numéricas para comparación correcta
+    def ip_to_tuple(ip):
+        return tuple(map(int, ip.split('.')))
+    
+    todos = list(NODOS_DESCUBIERTOS.keys()) + [IP_LOCAL]
+    nuevo_maestro = max(todos, key=ip_to_tuple)
+    
+    if IP_LOCAL == nuevo_maestro:
+        if not SOY_MAESTRO:
+            SOY_MAESTRO = True
+            MAESTRO_ACTUAL = IP_LOCAL
+            log_local("Soy el nuevo nodo maestro")
+            notificar_nuevo_maestro()
     else:
-        SOY_MAESTRO = False
-        MAESTRO_ACTUAL = nuevo_maestro
-        print("[INFO] Nodo esclavo. Maestro:", MAESTRO_ACTUAL)
+        if SOY_MAESTRO or MAESTRO_ACTUAL != nuevo_maestro:
+            SOY_MAESTRO = False
+            MAESTRO_ACTUAL = nuevo_maestro
+            log_local(f"Nodo esclavo. Maestro: {MAESTRO_ACTUAL}")
 
 # =====================
 # Verificar salud del maestro
@@ -524,15 +566,24 @@ def notificar_nuevo_maestro():
 # =====================
 # Cliente para enviar mensajes
 # =====================
-def enviar_a_todos(mensaje):
-    for ip, info in NODOS_DESCUBIERTOS.items():
-        port = info["puerto"]
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.connect((ip, port))
-                s.sendall(json.dumps(mensaje).encode())
-        except:
-            print(f"[ERROR] No se pudo enviar a {ip}:{port}")
+def enviar_a_todos(mensaje, max_intentos=3):
+    for ip, info in list(NODOS_DESCUBIERTOS.items()):
+        for intento in range(max_intentos):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(5)
+                    s.connect((ip, info["puerto"]))
+                    s.sendall(json.dumps(mensaje).encode())
+                    # Esperar confirmación
+                    respuesta = s.recv(1024)
+                    if respuesta:
+                        break  # Éxito, salir del bucle de intentos
+            except Exception as e:
+                log_local(f"Intento {intento+1} fallado con {ip}:{info['puerto']} - {str(e)}")
+                if intento == max_intentos - 1:
+                    log_local(f"Eliminando nodo no respondiente: {ip}")
+                    del NODOS_DESCUBIERTOS[ip]
+                    elegir_maestro()
 
 def enviar_a_maestro(mensaje):
     global MAESTRO_ACTUAL
@@ -846,9 +897,24 @@ threading.Thread(target=elegir_maestro, daemon=True).start()
 threading.Thread(target=verificar_maestro, daemon=True).start()
 
 if __name__ == "__main__":
-    if(IP_LOCAL == max(lista_sucursales)):
+    log_local(f"Iniciando nodo en {IP_LOCAL}:{PUERTO_NODO} ({SUCURSAL})")
+    log_local(f"Usando broadcast IP: {BROADCAST_IP}")
+    
+    # Hilo para descubrimiento inicial extendido
+    threading.Thread(target=enviar_broadcast, daemon=True).start()
+    
+    # Espera inicial para descubrimiento
+    time.sleep(INTERVALO_DISCOVERY * 2)
+    
+    # Iniciar servicios
+    threading.Thread(target=escuchar_broadcast, daemon=True).start()
+    threading.Thread(target=servidor_nodo, daemon=True).start()
+    threading.Thread(target=verificar_maestro, daemon=True).start()
+    
+    # Si somos el único nodo, nos convertimos en maestro
+    if not NODOS_DESCUBIERTOS:
         SOY_MAESTRO = True
         MAESTRO_ACTUAL = IP_LOCAL
-        print("[INFO] Soy el nodo maestro inicial")
-        threading.Thread(target=comparar_datos, daemon=True).start()
+        log_local("No se descubrieron otros nodos, soy el maestro inicial")
+    
     interfaz()
