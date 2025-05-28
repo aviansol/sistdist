@@ -6,73 +6,26 @@ import random
 from pymongo import MongoClient
 
 # =====================
-# Corrección de errores críticos
-# =====================
-
-def get_local_ip():
-    """Obtiene la IP real de la máquina (no loopback)"""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
-    except:
-        return socket.gethostbyname(socket.gethostname())
-
-def encontrar_puerto_disponible(base_port=60000, max_attempts=20):
-    """Encuentra un puerto disponible con más robustez"""
-    for port in range(base_port, base_port + max_attempts):
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.bind(('', port))
-                return port
-        except:
-            continue
-    raise Exception("No se pudo encontrar puerto disponible")
-
-# =====================
 # Configuraciones
 # =====================
 
-def get_broadcast_ip():
-    """Obtiene automáticamente la dirección de broadcast"""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-        return '.'.join(local_ip.split('.')[:-1] + ['255'])
-    except:
-        return '<broadcast>'  # Fallback si no se puede determinar
-
-def encontrar_puerto_disponible():
-    """Encuentra un puerto disponible en el rango especificado"""
-    lista_puertos = list(range(60000, 60010))
-    random.shuffle(lista_puertos)  # Mezclar para evitar conflictos
-    for puerto in lista_puertos:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(('', puerto))
-                return puerto
-        except:
-            continue
-    return None
-
 lista_sucursales = ["CDMX", "GDL", "MTY", "SLP", "PUE", "QRO", "TOL", "VER", "OAX", "CHI"]
-PUERTO_BROADCAST = 50000
-PUERTO_NODO = encontrar_puerto_disponible()
-if PUERTO_NODO is None:
-    print("[ERROR] No hay puertos disponibles")
-    exit(1)
 
+lista_puertos = [ x for x in range(60000, 60010)]
+
+PUERTO_BROADCAST = 50000
+PUERTO_NODO = random.choice(lista_puertos)
 INTERVALO_DISCOVERY = 5
 INTERVALO_VERIFICACION_MAESTRO = 10
-NODOS_DESCUBIERTOS = {}  # {ip: {"puerto": int, "sucursal": str}}
+NODOS_DESCUBIERTOS = {} # {ip: {"puerto": int, "sucursal": str}}
 SOY_MAESTRO = False
-IP_LOCAL = get_local_ip()
+IP_LOCAL = socket.gethostbyname(socket.gethostname())
 MAESTRO_ACTUAL = None
-BROADCAST_IP = get_broadcast_ip()
-SUCURSAL = random.choice(lista_sucursales) + " " + str(random.randint(1, 10))
 
+OPERACION_ACTUAL = 0 # empezamos el contador en 0 en cada nodo
+OPERACION_TIMESTAMP = time.time() # timestamp de la última operación
+
+SUCURSAL = random.choice(lista_sucursales) + " " + str(random.randint(1, 10))
 
 # =====================
 # Conexión a MongoDB local
@@ -156,38 +109,30 @@ for guia in coleccion_guias.find():
 # =====================
 def enviar_broadcast():
     global IP_LOCAL, PUERTO_NODO, SUCURSAL
-    tiempo_vida = 15  # Aumentado para mejor descubrimiento
+    tiempo_vida = 10  # segundos
     start_time = time.time()
-    
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         s.settimeout(1)
         while time.time() - start_time < tiempo_vida:
             mensaje = f"DISCOVER:{IP_LOCAL}:{PUERTO_NODO}:{SUCURSAL}"
-            try:
-                s.sendto(mensaje.encode(), (BROADCAST_IP, PUERTO_BROADCAST))
-                log_local(f"Enviado broadcast a {BROADCAST_IP}:{PUERTO_BROADCAST}")
-            except Exception as e:
-                log_local(f"Error enviando broadcast: {str(e)}")
-            time.sleep(2)  # Intervalo aumentado para reducir congestión
-    log_local("Broadcast discovery completado")
-
+            s.sendto(mensaje.encode(), ('<broadcast>', PUERTO_BROADCAST))
+            time.sleep(1)
+    print("[INFO] Broadcast discovery enviado")
 
 # =====================
 # Escuchar broadcast discovery (revive por 10s tras recibir)
 # =====================
 def escuchar_broadcast():
-    """Versión corregida de la función con manejo de errores"""
-    global NODOS_DESCUBIERTOS
-    
+    global NODOS_DESCUBIERTOS, MAESTRO_ACTUAL, SOY_MAESTRO
+    tiempo_vida = 10  # segundos
     while True:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                s.bind(('', PUERTO_BROADCAST))  # Corregido el nombre de la variable
-                s.settimeout(INTERVALO_DISCOVERY)
-                
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            s.bind(('', PUERTO_BROADCAST))
+            s.settimeout(tiempo_vida)
+            start_time = time.time()
+            while time.time() - start_time < tiempo_vida:
                 try:
                     data, addr = s.recvfrom(1024)
                     mensaje = data.decode()
@@ -196,20 +141,32 @@ def escuchar_broadcast():
                         ip_nodo = partes[1]
                         puerto_nodo = int(partes[2])
                         sucursal_nodo = partes[3] if len(partes) > 3 else "N/A"
-                        
                         if ip_nodo != IP_LOCAL:
                             NODOS_DESCUBIERTOS[ip_nodo] = {
                                 "puerto": puerto_nodo,
-                                "sucursal": sucursal_nodo,
-                                "last_seen": time.time()
+                                "sucursal": sucursal_nodo
                             }
-                            log_local(f"Nodo descubierto: {ip_nodo}:{puerto_nodo}")
-                            elegir_maestro()
+                            # Reiniciar el tiempo de vida al recibir un nuevo broadcast
+                            start_time = time.time()
+                            # Decidir maestro por IP mayor
+                            ips = list(NODOS_DESCUBIERTOS.keys()) + [IP_LOCAL]
+                            nuevo_maestro = max(ips)
+                            if IP_LOCAL == nuevo_maestro:
+                                SOY_MAESTRO = True
+                                MAESTRO_ACTUAL = IP_LOCAL
+                                print(f"[INFO] Soy el nuevo nodo maestro (Sucursal: {SUCURSAL})")
+                                notificar_nuevo_maestro()
+                            else:
+                                SOY_MAESTRO = False
+                                MAESTRO_ACTUAL = nuevo_maestro
+                                print(f"[INFO] Nodo esclavo. Maestro: {MAESTRO_ACTUAL}")
                 except socket.timeout:
-                    pass
-        except Exception as e:
-            log_local(f"Error en escuchar_broadcast: {str(e)}")
-            time.sleep(5)  # Esperar antes de reintentar
+                    break
+                except Exception:
+                    continue
+        break
+    print("[INFO] Descubierto por: ", [x["sucursal"] for x in NODOS_DESCUBIERTOS.values()])
+
     
 
 # =====================
@@ -217,31 +174,17 @@ def escuchar_broadcast():
 # =====================
 def elegir_maestro():
     global SOY_MAESTRO, MAESTRO_ACTUAL
-    
-    if not NODOS_DESCUBIERTOS:
+    todos = list(NODOS_DESCUBIERTOS.keys()) + [IP_LOCAL]
+    nuevo_maestro = max(todos)
+    if IP_LOCAL == nuevo_maestro:
         SOY_MAESTRO = True
         MAESTRO_ACTUAL = IP_LOCAL
-        log_local("Soy el único nodo, me convierto en maestro")
-        return
-    
-    # Convertir IPs a tuplas numéricas para comparación correcta
-    def ip_to_tuple(ip):
-        return tuple(map(int, ip.split('.')))
-    
-    todos = list(NODOS_DESCUBIERTOS.keys()) + [IP_LOCAL]
-    nuevo_maestro = max(todos, key=ip_to_tuple)
-    
-    if IP_LOCAL == nuevo_maestro:
-        if not SOY_MAESTRO:
-            SOY_MAESTRO = True
-            MAESTRO_ACTUAL = IP_LOCAL
-            log_local("Soy el nuevo nodo maestro")
-            notificar_nuevo_maestro()
+        print("[INFO] Soy el nuevo nodo maestro")
+        notificar_nuevo_maestro()
     else:
-        if SOY_MAESTRO or MAESTRO_ACTUAL != nuevo_maestro:
-            SOY_MAESTRO = False
-            MAESTRO_ACTUAL = nuevo_maestro
-            log_local(f"Nodo esclavo. Maestro: {MAESTRO_ACTUAL}")
+        SOY_MAESTRO = False
+        MAESTRO_ACTUAL = nuevo_maestro
+        print("[INFO] Nodo esclavo. Maestro:", MAESTRO_ACTUAL)
 
 # =====================
 # Verificar salud del maestro
@@ -267,22 +210,13 @@ articulos_en_uso = set()
 # Servidor TCP por nodo
 # =====================
 def servidor_nodo():
-    """Versión corregida del servidor TCP"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            s.bind((IP_LOCAL, PUERTO_NODO))
-            s.listen()
-            log_local(f"[TCP] Escuchando en {IP_LOCAL}:{PUERTO_NODO}")
-            while True:
-                try:
-                    conn, addr = s.accept()
-                    threading.Thread(target=atender_conexion, args=(conn, addr), daemon=True).start()
-                except Exception as e:
-                    log_local(f"Error aceptando conexión: {str(e)}")
-        except Exception as e:
-            log_local(f"Error iniciando servidor: {str(e)}")
-            raise
+        s.bind((IP_LOCAL, PUERTO_NODO))
+        s.listen()
+        print(f"[TCP] Escuchando en {IP_LOCAL}:{PUERTO_NODO}")
+        while True:
+            conn, addr = s.accept()
+            threading.Thread(target=atender_conexion, args=(conn, addr), daemon=True).start()
 
 def atender_conexion(conn, addr):
     with conn:
@@ -380,18 +314,35 @@ def atender_conexion(conn, addr):
             if not nodo_con_articulo:
                 print(f"[MAESTRO] Ningún nodo tiene el artículo {id_art} (Serie: {serie_art}). Me lo adjudico.")
                 with lock_inventario:
+                    cantidad_anterior = inventario.get((id_art, serie_art), {}).get("cantidad", 0)
+                    nombre_anterior = inventario.get((id_art, serie_art), {}).get("nombre")
+                    coleccion_inventario.find_one_and_replace(
+                        {"id": int(id_art), "serie": int(serie_art)},
+                        {
+                            "id": int(id_art),
+                            "serie": int(serie_art),
+                            "nombre": nombre_anterior,
+                            "cantidad": int(cantidad_anterior),
+                            "ubicacion": SUCURSAL
+                        },
+                        upsert=True
+                    )
                     inventario[(id_art, serie_art)] = {
                         "id": id_art,
                         "serie": serie_art,
-                        "nombre": f"Desconocido {id_art}",
-                        "cantidad": 1,
+                        "nombre": nombre_anterior,
+                        "cantidad": cantidad_anterior,
                         "ubicacion": SUCURSAL
                     }
-                    coleccion_inventario.insert_one({
-                        "id": int(id_art),
-                        "serie": int(serie_art),
-                        "nombre": f"Desconocido {id_art}",
-                        "cantidad": 1,
+
+                    # ahora actualizamos el registro en todos
+                    enviar_a_todos({
+                        "tipo": "articulo_agregado",
+                        "origen": (IP_LOCAL, PUERTO_NODO),  # para replicar el origen de la adición
+                        "id_articulo": id_art,
+                        "serie_articulo": serie_art,
+                        "nombre_articulo": nombre_anterior,
+                        "cantidad": cantidad_anterior,
                         "ubicacion": SUCURSAL
                     })
 
@@ -405,6 +356,7 @@ def atender_conexion(conn, addr):
                     s.connect((ip_destino, puerto_destino))
                     s.sendall(json.dumps({
                         "tipo": "compra",
+                        "origen": mensaje["origen"],  # para replicar el origen de la compra
                         "id_articulo": id_art,
                         "serie_articulo": serie_art,
                         "id_cliente": id_cli,
@@ -422,6 +374,7 @@ def atender_conexion(conn, addr):
             # Propagar a todos los nodos que la compra fue realizada
             enviar_a_todos({
                 "tipo": "compra_realizada",
+                "origen": (IP_LOCAL, PUERTO_NODO),
                 "id_articulo": id_art,
                 "serie_articulo": serie_art,
                 "id_cliente": id_cli,
@@ -441,13 +394,21 @@ def atender_conexion(conn, addr):
 
             with lock_inventario:
                 inventario[(id_art, serie_art)]['cantidad'] = cantidad
-                try:
+                preexistente = coleccion_inventario.find_one({"id": int(id_art), "serie": int(serie_art)})
+                max_id_art = coleccion_inventario.find_one({}, sort=[("id", -1)]) # aquí buscamos el id más alto
+                # acutalizamos el id del artículo si es menor al más alto que tenemos
+                if preexistente and preexistente["id"] < max_id_art["id"]:
+                    id_art = max_id_art["id"] + 1
+                    inventario[(id_art, serie_art)]["id"] = id_art
+                    mensaje["id_articulo"] = id_art
+                    print(f"[INFO] Actualizando ID del artículo {serie_art} a {id_art} (antes era {preexistente['id']})")
+                if preexistente:
                     coleccion_inventario.find_one_and_replace(
                         {"id": int(id_art), "serie": int(serie_art)},
                         {"id": int(id_art), "nombre": nombre_art, "serie": int(serie_art), "cantidad": int(cantidad), "ubicacion": mensaje["ubicacion"]},
                         upsert=True
                     )
-                except Exception as e:
+                else:
                     coleccion_inventario.insert_one({
                         "id": int(id_art),
                         "nombre": nombre_art,
@@ -455,20 +416,37 @@ def atender_conexion(conn, addr):
                         "cantidad": int(cantidad),
                         "ubicacion": SUCURSAL
                     })
-                log_local(f"Artículo agregado: {id_art} (Serie: {serie_art}) (+{cantidad})")
-                print(f"[INVENTARIO] Agregado {cantidad} unidades de {id_art} (Serie: {serie_art})")
-        
+                log_local(f"Artículo {'cambiado' if preexistente else 'añadido'}: {id_art} (Serie: {serie_art}) (+{cantidad})")
+                print(f"[INVENTARIO] {'Cambiado' if preexistente else 'Añadido'} {cantidad} unidades de {id_art} (Serie: {serie_art}) en {mensaje['ubicacion']}")
+                # respondemos de hecho
+                conn.sendall(b"ok")  # Al final del bloque de agregar artículo
+
         elif tipo == "cliente_update":
             id_cli = mensaje["id_cliente"]
             nombre = mensaje["nombre"]
             correo = mensaje.get("email", "")
             telefono = mensaje.get("telefono", "")
             
-            clientes[id_cli] = {
-                "nombre": nombre,
-                "email": correo,
-                "telefono": telefono
-            }
+            preexistente = coleccion_clientes.find_one({"id": int(id_cli)})
+
+            if preexistente:
+                # Si el cliente ya existe, actualizamos sus datos
+                log_local(f"Actualizando cliente: {id_cli} -> {nombre}")
+                print(f"[CLIENTE] Actualizando: {id_cli} -> {nombre}")
+                coleccion_clientes.find_one_and_replace(
+                    {"id": int(id_cli)},
+                    {"id": int(id_cli), "nombre": nombre, "email": correo, "telefono": telefono},
+                    upsert=True
+                )
+                clientes[id_cli] = {
+                    "nombre": nombre,
+                    "email": correo,
+                    "telefono": telefono
+                }
+                conn.sendall(b"ok")  # Al final del bloque de actualización de cliente
+                return
+            
+            # Actualizamos el cliente en la base de datos
             coleccion_clientes.update_one({"id": int(id_cli)}, {
                 "$set": {
                     "nombre": nombre,
@@ -476,13 +454,24 @@ def atender_conexion(conn, addr):
                     "telefono": telefono
                 }
             }, upsert=True)
+            # Actualizamos el registro local
+            clientes[id_cli] = {
+                "nombre": nombre,
+                "email": correo,
+                "telefono": telefono
+            }
             log_local(f"Cliente actualizado: {id_cli} -> {nombre}")
             print(f"[CLIENTE] Actualizado: {id_cli} -> {nombre}")
+            conn.sendall(b"ok")  # Al final del bloque de actualización de cliente
 
         elif tipo == "solicitar_estado":
             estado = {
                 "inventario": list(coleccion_inventario.find({}, {"id": 0})),
-                "clientes": list(coleccion_clientes.find({}, {"id": 0}))
+                "clientes": list(coleccion_clientes.find({}, {"id": 0})),
+                "guias": list(coleccion_guias.find({}, {"id": 0})),
+                "sucursal": SUCURSAL,
+                'operacion': OPERACION_ACTUAL,
+                'timestamp': OPERACION_TIMESTAMP,
             }
             conn.sendall(json.dumps(estado).encode())
 
@@ -502,6 +491,7 @@ def atender_conexion(conn, addr):
         
         elif tipo == "articulo_agregado":
             id_art = mensaje["id_articulo"]
+            origen = mensaje['origen']
             serie_art = mensaje["serie_articulo"]
             nombre_art = mensaje["nombre_articulo"]
             cantidad = mensaje["cantidad"]
@@ -515,17 +505,14 @@ def atender_conexion(conn, addr):
                     "cantidad": cantidad,
                     "ubicacion": ubicacion
                 }
-                coleccion_inventario.find_one_and_update(
+                preexistente = coleccion_inventario.find_one({"id": int(id_art), "serie": int(serie_art)})
+                coleccion_inventario.find_one_and_replace(
                     {"id": int(id_art), "serie": int(serie_art)},
-                    {"$set": {
-                        "cantidad": int(cantidad),
-                        "ubicacion": ubicacion,
-                        "nombre": nombre_art},
-                    },
+                    {"id": int(id_art), "nombre": nombre_art, "serie": int(serie_art), "cantidad": int(cantidad), "ubicacion": ubicacion},
                     upsert=True
                 )
-                log_local(f"Artículo agregado: {id_art} (Serie: {serie_art}) (+{cantidad})")
-                print(f"[INVENTARIO] Agregado {cantidad} unidades de {id_art} (Serie: {serie_art}) en {ubicacion}")
+                log_local(f"Artículo {'actualizado' if preexistente else 'agregado'}: {id_art} (Serie: {serie_art}) (+{cantidad})")
+                print(f"[INVENTARIO] {'Actualizado' if preexistente else 'Agregado'} {cantidad} unidades de {id_art} (Serie: {serie_art}) en {ubicacion}")
         elif tipo == "cliente_actualizado":
             id_cli = mensaje["id_cliente"]
             nombre = mensaje["nombre"]
@@ -575,7 +562,8 @@ def atender_conexion(conn, addr):
                     print(f"[ERROR] Artículo {id_art} (Serie: {serie_art}) no encontrado en el inventario local.")
                     # pedimos consenso para actualizar el inventario
                     enviar_a_todos({
-                        "tipo": "solicitar_estado"
+                        "tipo": "solicitar_estado",
+                        "origen": (IP_LOCAL, PUERTO_NODO),
                     })
             # registrar guía de envío
             guia_codigo = f"{id_art}-{serie_art}-{ubicacion}-{id_cli}"
@@ -593,24 +581,15 @@ def notificar_nuevo_maestro():
 # =====================
 # Cliente para enviar mensajes
 # =====================
-def enviar_a_todos(mensaje, max_intentos=3):
-    for ip, info in list(NODOS_DESCUBIERTOS.items()):
-        for intento in range(max_intentos):
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(5)
-                    s.connect((ip, info["puerto"]))
-                    s.sendall(json.dumps(mensaje).encode())
-                    # Esperar confirmación
-                    respuesta = s.recv(1024)
-                    if respuesta:
-                        break  # Éxito, salir del bucle de intentos
-            except Exception as e:
-                log_local(f"Intento {intento+1} fallado con {ip}:{info['puerto']} - {str(e)}")
-                if intento == max_intentos - 1:
-                    log_local(f"Eliminando nodo no respondiente: {ip}")
-                    del NODOS_DESCUBIERTOS[ip]
-                    elegir_maestro()
+def enviar_a_todos(mensaje):
+    for ip, info in NODOS_DESCUBIERTOS.items():
+        port = info["puerto"]
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.connect((ip, port))
+                s.sendall(json.dumps(mensaje).encode())
+        except:
+            print(f"[ERROR] No se pudo enviar a {ip}:{port}")
 
 def enviar_a_maestro(mensaje):
     global MAESTRO_ACTUAL
@@ -655,6 +634,7 @@ def enviar_a_maestro(mensaje):
                     # actualizamos a todos los nodos
                     enviar_a_todos({
                         "tipo": "compra_realizada",
+                        "origen": mensaje["origen"], # para replicar el origen de la compra
                         "id_articulo": mensaje["id_articulo"],
                         "serie_articulo": mensaje["serie_articulo"],
                         "id_cliente": mensaje["id_cliente"],
@@ -681,6 +661,7 @@ def enviar_a_maestro(mensaje):
                 log_local(f"Artículo agregado: {mensaje['id_articulo']} (Serie: {mensaje['serie_articulo']}) (+{mensaje['cantidad']})")
                 enviar_a_todos({
                     "tipo": "articulo_agregado",
+                    "origen": mensaje["origen"],  # para replicar el origen de la adición
                     "id_articulo": mensaje["id_articulo"],
                     "serie_articulo": mensaje["serie_articulo"],
                     "nombre_articulo": mensaje["nombre_articulo"],
@@ -708,6 +689,7 @@ def enviar_a_maestro(mensaje):
             log_local(f"Cliente actualizado: {id_cli} -> {nombre}")
             enviar_a_todos({
                 "tipo": "cliente_actualizado",
+                "origen": mensaje["origen"],  # para replicar el origen de la actualización
                 "id_cliente": id_cli,
                 "nombre": nombre,
                 "email": correo,
@@ -723,44 +705,55 @@ def comparar_datos():
     time.sleep(20)  # Esperar a que se estabilicen los nodos
     if not SOY_MAESTRO:
         return
+
     print("[CONSENSO] Comparando datos entre nodos")
     registros = {}
+
     for ip, port in NODOS_DESCUBIERTOS.items():
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.connect((ip, port))
                 s.sendall(json.dumps({"tipo": "solicitar_estado"}).encode())
                 data = s.recv(8192)
-                registros[ip] = json.loads(data.decode())
-        except:
+                estado = json.loads(data.decode())
+                registros[ip] = estado
+        except Exception as e:
+            print(f"[CONSENSO] Error con nodo {ip}:{port} -> {e}")
             continue
-    votos = {}
-    for ip, estado in registros.items():
-        inventario = tuple(sorted((k, v) for k, v in estado["inventario"].items()))
-        clientes = tuple(sorted((k, v) for k, v in estado["clientes"].items()))
-        votos[(inventario, clientes)] = votos.get((inventario, clientes), 0) + 1
-    # Encontrar el estado más votado
-    try:
-        estado_mas_votado = max(votos, key=votos.get)
-        inventario, clientes = estado_mas_votado
-        print("[CONSENSO] Estado más votado encontrado")
-        # Forzar el estado en la base de datos
-        coleccion_inventario.delete_many({})
-        coleccion_inventario.insert_many([{"id": k[0], "serie": k[1], "nombre": v["nombre"], "cantidad": v["cantidad"], "ubicacion": v["ubicacion"]} for k, v in inventario])
-        coleccion_clientes.delete_many({})
-        coleccion_clientes.insert_many([{"id": k[0], "nombre": v["nombre"], "email": v["email"], "telefono": v["telefono"]} for k, v in clientes])
-        # Notificar a todos los nodos
-        msg = {
-            "origen": (IP_LOCAL, PUERTO_NODO),
-            "tipo": "forzar_estado",
-            "estado": {
-                "inventario": [{"id": k[0], "serie": k[1], "nombre": v["nombre"], "cantidad": v["cantidad"], "ubicacion": v["ubicacion"]} for k, v in inventario],
-                "clientes": [{"id": k[0], "nombre": v["nombre"], "email": v["email"], "telefono": v["telefono"]} for k, v in clientes]
-            }
-        }
-    except ValueError:
+
+    if not registros:
         print("[CONSENSO] No se encontraron estados válidos para consenso")
         return
+
+    def convertir_a_epoch(timestamp_str):
+        try:
+            # Formato ISO 8601 sin zona horaria: '2025-05-28T15:34:12'
+            t = time.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S")
+            return time.mktime(t)
+        except:
+            return 0  # Si falla, asumimos un timestamp muy antiguo
+
+    # Determinar el mejor estado por operacion y timestamp en epoch
+    def clave_prioridad(estado):
+        op = int(estado.get("operacion", 0))
+        ts = convertir_a_epoch(estado.get("timestamp", "1970-01-01T00:00:00"))
+        return (op, ts)
+
+    mejor_estado = max(registros.values(), key=clave_prioridad)
+
+    print("[CONSENSO] Nodo con estado más confiable seleccionado")
+
+    # Aplicar el estado consensuado
+    coleccion_inventario.delete_many({})
+    coleccion_inventario.insert_many(mejor_estado.get("inventario", []))
+
+    coleccion_clientes.delete_many({})
+    coleccion_clientes.insert_many(mejor_estado.get("clientes", []))
+
+    coleccion_guias.delete_many({})
+    coleccion_guias.insert_many(mejor_estado.get("guias", []))
+
+    print("[CONSENSO] Estado actualizado según nodo más confiable")
 
 # =====================
 # Interfaz de comandos
@@ -837,8 +830,10 @@ def interfaz():
                 cantidad = int(input("Cantidad: "))
                 msg = {
                     "tipo": "agregar_articulo", 
+                    "origen": (IP_LOCAL, PUERTO_NODO),
                     "nombre_articulo": nombre_art,
                     "serie_articulo": serie_art, 
+                    "id_articulo": str(len(inventario)),  # Generar ID único
                     "cantidad": cantidad, 
                     "ubicacion": SUCURSAL
                 }
@@ -924,24 +919,9 @@ threading.Thread(target=elegir_maestro, daemon=True).start()
 threading.Thread(target=verificar_maestro, daemon=True).start()
 
 if __name__ == "__main__":
-    log_local(f"Iniciando nodo en {IP_LOCAL}:{PUERTO_NODO} ({SUCURSAL})")
-    log_local(f"Usando broadcast IP: {BROADCAST_IP}")
-    
-    # Hilo para descubrimiento inicial extendido
-    threading.Thread(target=enviar_broadcast, daemon=True).start()
-    
-    # Espera inicial para descubrimiento
-    time.sleep(INTERVALO_DISCOVERY * 2)
-    
-    # Iniciar servicios
-    threading.Thread(target=escuchar_broadcast, daemon=True).start()
-    threading.Thread(target=servidor_nodo, daemon=True).start()
-    threading.Thread(target=verificar_maestro, daemon=True).start()
-    
-    # Si somos el único nodo, nos convertimos en maestro
-    if not NODOS_DESCUBIERTOS:
+    if(IP_LOCAL == max(lista_sucursales)):
         SOY_MAESTRO = True
         MAESTRO_ACTUAL = IP_LOCAL
-        log_local("No se descubrieron otros nodos, soy el maestro inicial")
-    
+        print("[INFO] Soy el nodo maestro inicial")
+        threading.Thread(target=comparar_datos, daemon=True).start()
     interfaz()
