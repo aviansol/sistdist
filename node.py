@@ -28,7 +28,15 @@ INTERVALO_DISCOVERY = 5
 INTERVALO_VERIFICACION_MAESTRO = 10
 NODOS_DESCUBIERTOS = {} # {ip: {"puerto": int, "sucursal": str}}
 SOY_MAESTRO = False
-IP_LOCAL = socket.gethostbyname(socket.gethostname())
+def get_local_ip():
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except:
+        return socket.gethostbyname(socket.gethostname())
+
+IP_LOCAL = get_local_ip()
 MAESTRO_ACTUAL = None
 
 OPERACION_ACTUAL = 0 # empezamos el contador en 0 en cada nodo
