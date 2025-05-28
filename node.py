@@ -247,18 +247,21 @@ def atender_conexion(conn, addr):
             id_cli = mensaje["id_cliente"]
             fecha = mensaje["fecha_envio"]
             id_art = mensaje["id_articulo"]
+            origen = mensaje.get("origen", [IP_LOCAL, PUERTO_NODO])
+            sucursal_remota = NODOS_DESCUBIERTOS.get(origen[0], {}).get("sucursal", SUCURSAL)
 
             with lock_inventario:
-                if( serie_art not in inventario or inventario.get((id_art, serie_art), 0) <= 0):
-                    nombre_objeto = coleccion_inventario.find_one({"serie": int(serie_art)}, {"nombre": 1, "id": 0})
-                    print(f"[ERROR] Artículo {nombre_objeto}(Serie: {serie_art}) no disponible.")
+                if (id_art, serie_art) not in inventario:
+                    print(f"[ERROR] Artículo {id_art} (Serie: {serie_art}) no encontrado en el inventario local.")
+                    conn.sendall(b"error")
                     return
                 
-                inventario.find_one({ "serie": serie_art }, { "cantidad": 1, "id": 0 })
                 inventario[(id_art, serie_art)]['cantidad'] -= 1
-                if inventario[(id_art, serie_art)] < 0:
-                    print(f"[ERROR] No hay suficiente inventario para el artículo {serie_art}.")
+                if inventario[(id_art, serie_art)]['cantidad'] <= 0:
+                    print(f"[ERROR] No hay suficiente inventario para el artículo {id_art} (Serie: {serie_art}).")
+                    conn.sendall(b"error")
                     return
+                
                 coleccion_inventario.find_one_and_update(
                     {"id": int(id_art), "serie": int(serie_art)},
                     {"$set": {
@@ -270,6 +273,18 @@ def atender_conexion(conn, addr):
                 )
                 log_local(f"Compra realizada: (Serie: {serie_art}) por cliente {id_cli} en {fecha}")
                 print(f"[COMPRA] Artículo (Serie: {serie_art}) vendido a cliente {id_cli} en {fecha}")
+                conn.sendall(b"ok")  # Al final del bloque de compra
+                # actualizamos los registros en todos los nodos
+                enviar_a_todos({
+                    "tipo": "compra_realizada",
+                    "origen": [IP_LOCAL, PUERTO_NODO],
+                    "id_articulo": id_art,
+                    "serie_articulo": serie_art,
+                    "id_cliente": id_cli,
+                    "fecha_envio": fecha,
+                    "ubicacion": sucursal_remota
+                })
+
             # Registrar guía de envío
             guia_codigo = f"{id_art}-{serie_art}-{inventario[(id_art, serie_art)]['ubicacion']}-{id_cli}"
             coleccion_guias.insert_one({
@@ -554,6 +569,7 @@ def atender_conexion(conn, addr):
             serie_art = mensaje["serie_articulo"]
             id_cli = mensaje["id_cliente"]
             ubicacion = mensaje["ubicacion"]
+            fecha_envio = mensaje["fecha_envio"]
 
             log_local(f"Compra realizada: {id_art} (Serie: {serie_art}) por cliente {id_cli} en {ubicacion}")
             print(f"[COMPRA] Artículo {id_art} (Serie: {serie_art}) vendido a cliente {id_cli} en {ubicacion}")
@@ -564,13 +580,9 @@ def atender_conexion(conn, addr):
                     if inventario[(id_art, serie_art)]["cantidad"] < 0:
                         print(f"[ERROR] No hay suficiente inventario para el artículo {id_art} (Serie: {serie_art}).")
                         return
-                    coleccion_inventario.find_one_and_update(
+                    coleccion_inventario.find_one_and_replace(
                         {"id": int(id_art), "serie": int(serie_art)},
-                        {"$set": {
-                            "cantidad": int(inventario[(id_art, serie_art)]["cantidad"]),
-                            "ubicacion": ubicacion,
-                            "nombre": inventario[(id_art, serie_art)]["nombre"]},
-                        },
+                        {"id": int(id_art), "nombre": inventario[(id_art, serie_art)]["nombre"], "serie": int(serie_art), "cantidad": int(inventario[(id_art, serie_art)]["cantidad"]), "ubicacion": ubicacion},
                         upsert=True
                     )
                 else:
