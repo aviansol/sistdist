@@ -249,7 +249,6 @@ def atender_conexion(conn, addr):
             OPERACION_ACTUAL += 1
             OPERACION_TIMESTAMP = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
 
-
         if tipo == "ping":
             conn.sendall(b"pong")
 
@@ -262,11 +261,13 @@ def atender_conexion(conn, addr):
             sucursal_remota = NODOS_DESCUBIERTOS.get(origen[0], {}).get("sucursal", SUCURSAL)
 
             with lock_inventario:
+                # existe
                 if (id_art, serie_art) not in inventario:
                     print(f"[ERROR] Artículo {id_art} (Serie: {serie_art}) no encontrado en el inventario local.")
                     conn.sendall(b"error")
                     return
                 
+                # reducimos la cantidad
                 inventario[(id_art, serie_art)]['cantidad'] -= 1
                 if inventario[(id_art, serie_art)]['cantidad'] <= 0:
                     print(f"[ERROR] No hay suficiente inventario para el artículo {id_art} (Serie: {serie_art}).")
@@ -277,7 +278,7 @@ def atender_conexion(conn, addr):
                     {"id": int(id_art), "serie": int(serie_art)},
                     {"$set": {
                         "cantidad": int(inventario[(id_art, serie_art)]['cantidad']),
-                        "ubicacion": SUCURSAL,
+                        # "ubicacion": SUCURSAL,
                         "nombre": inventario[(id_art, serie_art)]['nombre']},
                     },
                     upsert=True
@@ -293,7 +294,7 @@ def atender_conexion(conn, addr):
                     "serie_articulo": serie_art,
                     "id_cliente": id_cli,
                     "fecha_envio": fecha,
-                    "ubicacion": sucursal_remota
+                    "ubicacion": SUCURSAL
                 })
 
             # Registrar guía de envío
@@ -323,7 +324,9 @@ def atender_conexion(conn, addr):
             id_cli = mensaje["id_cliente"]
             serie_art = mensaje.get("serie_articulo", "N/A")
             fecha = mensaje.get("fecha_envio", time.strftime("%Y-%m-%d %H:%M:%S"))
+            ubicacion_remota = NODOS_DESCUBIERTOS.get(ip_origen, {}).get("sucursal", SUCURSAL)
 
+            # Verificar si el artículo ya está en uso
             if (id_art, serie_art) in articulos_en_uso:
                 log_local(f"Rechazada compra por concurrencia: {id_art} (Serie: {serie_art})")
                 print(f"[MAESTRO] Rechazada compra del artículo {id_art} (Serie: {serie_art}) (en uso)")
@@ -341,10 +344,11 @@ def atender_conexion(conn, addr):
                         s.sendall(json.dumps({"tipo": "solicitar_estado"}).encode())
                         data = s.recv(8192)
                         estado = json.loads(data.decode())
-                        for art in estado.get("inventario", []):
-                            if str(art["id"]) == id_art and str(art["serie"]) == serie_art and art["cantidad"] > 0:
-                                nodo_con_articulo = (ip, info["puerto"])
-                                break
+                        inventario_nodo = { (str(item["id"]), str(item["serie"])): item for item in estado["inventario"] }
+                        if (str(id_art), str(serie_art)) in inventario_nodo:
+                            nodo_con_articulo = (ip, info["puerto"])
+                            print(f"[INFO] Nodo {ip} tiene el artículo {id_art} (Serie: {serie_art})")
+                            break
                 except Exception as e:
                     print(f"[WARN] No se pudo consultar el nodo {ip}: {e}")
                 if nodo_con_articulo:
@@ -355,17 +359,26 @@ def atender_conexion(conn, addr):
                 with lock_inventario:
                     cantidad_anterior = inventario.get((id_art, serie_art), {}).get("cantidad", 0)
                     nombre_anterior = inventario.get((id_art, serie_art), {}).get("nombre")
-                    coleccion_inventario.find_one_and_replace(
-                        {"id": int(id_art), "serie": int(serie_art)},
-                        {
+                    try:
+                        coleccion_inventario.find_one_and_replace(
+                            {"id": int(id_art), "serie": int(serie_art)},
+                            {
+                                "id": int(id_art),
+                                "serie": int(serie_art),
+                                "nombre": nombre_anterior,
+                                "cantidad": int(cantidad_anterior),
+                                "ubicacion": SUCURSAL
+                            },
+                            upsert=True
+                        )
+                    except Exception as e:
+                        coleccion_inventario.insert_one({
                             "id": int(id_art),
                             "serie": int(serie_art),
                             "nombre": nombre_anterior,
                             "cantidad": int(cantidad_anterior),
                             "ubicacion": SUCURSAL
-                        },
-                        upsert=True
-                    )
+                        })
                     inventario[(id_art, serie_art)] = {
                         "id": id_art,
                         "serie": serie_art,
@@ -387,7 +400,7 @@ def atender_conexion(conn, addr):
                     })
 
                 nodo_con_articulo = (IP_LOCAL, PUERTO_NODO)
-
+        
             # Enviar orden de compra al nodo que lo tiene
             ip_destino, puerto_destino = nodo_con_articulo
             try:
@@ -419,13 +432,11 @@ def atender_conexion(conn, addr):
                 "id_articulo": id_art,
                 "serie_articulo": serie_art,
                 "id_cliente": id_cli,
-                "ubicacion": SUCURSAL,
+                "ubicacion": mensaje["ubicacion"],
                 "fecha_envio": fecha
             })
 
             articulos_en_uso.remove((id_art, serie_art))
-
-
 
         elif tipo == "agregar_articulo":
             id_art = mensaje["id_articulo"]
@@ -463,6 +474,12 @@ def atender_conexion(conn, addr):
                 conn.sendall(b"ok")  # Al final del bloque de agregar artículo
 
         elif tipo == "cliente_update":
+
+            if mensaje.get("origen") == [IP_LOCAL, PUERTO_NODO]:
+                # Si no es de este nodo, no lo procesamos
+                print("[INFO] Cliente update recibido de este nodo, ignorando")
+                return
+
             id_cli = mensaje["id_cliente"]
             nombre = mensaje["nombre"]
             correo = mensaje.get("email", "")
@@ -586,39 +603,48 @@ def atender_conexion(conn, addr):
             id_art = mensaje["id_articulo"]
             serie_art = mensaje["serie_articulo"]
             id_cli = mensaje["id_cliente"]
-            ubicacion = mensaje["ubicacion"]
             fecha_envio = mensaje["fecha_envio"]
+            origen = mensaje["origen"]
 
-            log_local(f"Compra realizada: {id_art} (Serie: {serie_art}) por cliente {id_cli} en {ubicacion}")
-            print(f"[COMPRA] Artículo {id_art} (Serie: {serie_art}) vendido a cliente {id_cli} en {ubicacion}")
-            # actualizamos nuestro registro de inventario
+            if origen == [IP_LOCAL, PUERTO_NODO]:
+                # Este nodo ya hizo la compra
+                return
+
+            log_local(f"Compra replicada: {id_art} (Serie: {serie_art}) por cliente {id_cli}")
+            print(f"[REPLICACIÓN] Confirmando compra de artículo {id_art} (Serie: {serie_art}) por cliente {id_cli}")
+
             with lock_inventario:
                 if (id_art, serie_art) in inventario:
-                    inventario[(id_art, serie_art)]["cantidad"] -= 1
-                    if inventario[(id_art, serie_art)]["cantidad"] < 0:
-                        print(f"[ERROR] No hay suficiente inventario para el artículo {id_art} (Serie: {serie_art}).")
-                        return
+                    # NO reducir cantidad, solo asegurar sincronía
+                    cantidad = inventario[(id_art, serie_art)]["cantidad"]
                     coleccion_inventario.find_one_and_replace(
                         {"id": int(id_art), "serie": int(serie_art)},
-                        {"id": int(id_art), "nombre": inventario[(id_art, serie_art)]["nombre"], "serie": int(serie_art), "cantidad": int(inventario[(id_art, serie_art)]["cantidad"]), "ubicacion": ubicacion},
+                        {
+                            "id": int(id_art),
+                            "nombre": inventario[(id_art, serie_art)]["nombre"],
+                            "serie": int(serie_art),
+                            "cantidad": cantidad,
+                            "ubicacion": inventario[(id_art, serie_art)]["ubicacion"]
+                        },
                         upsert=True
                     )
                 else:
-                    print(f"[ERROR] Artículo {id_art} (Serie: {serie_art}) no encontrado en el inventario local.")
-                    # pedimos consenso para actualizar el inventario
-                    enviar_a_todos({
-                        "tipo": "solicitar_estado",
-                        "origen": [IP_LOCAL, PUERTO_NODO],
-                        "fecha_envio": time.strftime("%Y-%m-%d %H:%M:%S")
-                    })
-            # registrar guía de envío
-            guia_codigo = f"{id_art}-{serie_art}-{ubicacion}-{id_cli}"
+                    print(f"[REPLICACIÓN] Artículo {id_art} (Serie: {serie_art}) no encontrado")
+
+            # Registrar la guía (esto sí puedes replicarlo)
+            guia_codigo = f"{id_art}-{serie_art}-{inventario[(id_art, serie_art)]['ubicacion']}-{id_cli}"
             coleccion_guias.insert_one({
                 "id": len(guias),
                 "codigo": guia_codigo,
-                "fecha_envio": mensaje["fecha_envio"],
-                "estado": "Enviado",
+                "fecha_envio": fecha_envio,
+                "estado": "Enviado"
             })
+            guias[str(len(guias))] = {
+                "codigo": guia_codigo,
+                "fecha_envio": fecha_envio,
+                "estado": "Enviado"
+            }
+
 
 def notificar_nuevo_maestro():
     msg = {"tipo": "nuevo_maestro", "ip": IP_LOCAL, "origen": [IP_LOCAL, PUERTO_NODO], "fecha_envio": time.strftime("%Y-%m-%d %H:%M:%S")}
@@ -650,6 +676,8 @@ def enviar_a_maestro(mensaje):
     else:
         print("[INFO] Soy el maestro, no se envía al maestro")
         if( mensaje["tipo"] == "solicitar_compra"):
+            # Si soy el maestro, no envío al maestro, sino que manejo la compra directamente
+            # verificamos si el artículo está en inventario y en la sucursal correcta
             if(inventario[(mensaje["id_articulo"], mensaje["serie_articulo"])]["ubicacion"] != SUCURSAL):
                 print(f"[ERROR] Artículo {mensaje['id_articulo']} (Serie: {mensaje['serie_articulo']}) no disponible en la sucursal actual.")
                 enviar_a_todos(mensaje)
@@ -678,6 +706,7 @@ def enviar_a_maestro(mensaje):
                         "fecha_envio": guias[str(len(guias)-1)]["fecha_envio"],
                         "estado": guias[str(len(guias)-1)]["estado"]
                     })
+
                     # actualizamos a todos los nodos
                     enviar_a_todos({
                         "tipo": "compra_realizada",
@@ -686,8 +715,9 @@ def enviar_a_maestro(mensaje):
                         "serie_articulo": mensaje["serie_articulo"],
                         "id_cliente": mensaje["id_cliente"],
                         "fecha_envio": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "ubicacion": SUCURSAL
+                        "ubicacion": mensaje["ubicacion"]
                     })
+
         elif( mensaje["tipo"] == "agregar_articulo"):
             with lock_inventario:
                 inventario[(mensaje["id_articulo"], mensaje["serie_articulo"])] = {
@@ -759,18 +789,31 @@ def comparar_datos():
 
     for ip, info in NODOS_DESCUBIERTOS.items():
         try:
-            puerto = info["puerto"]  # Extrae el número de puerto
+            puerto = info["puerto"]
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(5)  # Evita que se quede colgado si el nodo no responde
                 s.connect((ip, puerto))
                 s.sendall(json.dumps({"tipo": "solicitar_estado"}).encode())
+
                 data = s.recv(8192)
-                estado = json.loads(data.decode())
+                if not data:
+                    print(f"[CONSENSO] Nodo {ip} respondió vacío")
+                    continue
+
+                raw_json = data.decode(errors="replace").strip()
+                print(f"[CONSENSO] Respuesta cruda de {ip}:{puerto}:\n{raw_json}")
+
+                try:
+                    estado = json.loads(raw_json)
+                except json.JSONDecodeError as je:
+                    print(f"[CONSENSO] Error al decodificar JSON de {ip}:{puerto} -> {je}")
+                    continue
+
                 campos_requeridos = ["inventario", "clientes", "guias", "operacion", "timestamp"]
-                for campo in campos_requeridos:
-                    if campo not in estado:
-                        print(f"[CONSENSO] Nodo {ip} no tiene campo requerido: {campo}")
-                        continue
-                registros[ip] = estado
+                if all(campo in estado for campo in campos_requeridos):
+                    registros[ip] = estado
+                else:
+                    print(f"[CONSENSO] Nodo {ip} tiene campos faltantes")
         except Exception as e:
             print(f"[CONSENSO] Error con nodo {ip}:{info} -> {e}")
             continue
@@ -837,24 +880,34 @@ def interfaz():
             id_cli = input("ID Cliente: ")
             msg = {
                 "tipo": "solicitar_compra",
-                "origen": (IP_LOCAL,PUERTO_NODO),
+                "origen": (IP_LOCAL, PUERTO_NODO),
                 "id_articulo": id_art,
                 "serie_articulo": serie_art,
                 "id_cliente": id_cli,
                 "fecha_envio": time.strftime("%Y-%m-%d %H:%M:%S")
             }
 
+            if( not id_cli in clientes):
+                print(f"[ERROR] Cliente {id_cli} no encontrado.")
+                continue
+
             if( not SOY_MAESTRO):
                 enviar_a_maestro(msg)
             else:
-                # comprobamos si está en nuestra sucursal
+                # comprobamos si está disponible
                 if( serie_art not in inventario or inventario.get((id_art, serie_art), 0) <= 0):
+
+                    # disponible en cantidad
                     if(inventario[(id_art, serie_art)]['cantidad'] <= 0):
                         print(f"[ERROR] Artículo {id_art} (Serie: {serie_art}) no disponible.")
                         continue
+
+                    # disponible en otra sucursal
                     if(inventario.get((id_art, serie_art))["ubicacion"] != SUCURSAL):
                         print(f"[ERROR] Artículo {id_art} (Serie: {serie_art}) no disponible en la sucursal actual.")
                         enviar_a_todos(msg)
+                    
+                    # disponible en esta sucursal
                     else:
                         with lock_inventario:
                             inventario[(id_art, serie_art)]["cantidad"] -= 1
@@ -862,7 +915,7 @@ def interfaz():
                             {"id": int(msg["id_articulo"]), "serie": int(serie_art)},
                             {"$set": {
                                 "cantidad": int(inventario[(msg["id_articulo"], serie_art)]['cantidad']),
-                                "ubicacion": SUCURSAL,
+                                # "ubicacion": SUCURSAL,
                                 "nombre": inventario[(msg["id_articulo"], serie_art)]['nombre']},
                             },
                             upsert=True
@@ -880,6 +933,17 @@ def interfaz():
                             "fecha_envio": guias[str(len(guias)-1)]["fecha_envio"],
                             "estado": guias[str(len(guias)-1)]["estado"]
                         })
+                        # actualizamos a todos los nodos
+                        enviar_a_todos({
+                            "tipo": "compra_realizada",
+                            "origen": (IP_LOCAL, PUERTO_NODO),  # para replicar el origen de la compra
+                            "id_articulo": id_art,
+                            "serie_articulo": serie_art,
+                            "id_cliente": id_cli,
+                            "fecha_envio": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "ubicacion": SUCURSAL
+                        })
+                
 
         elif cmd == "agregar":
             print("Qué desea agregar?")
@@ -909,6 +973,7 @@ def interfaz():
                 
                 msg = {
                     "tipo": "cliente_update",
+                    "id_cliente": str(len(clientes)),  # Generar ID único	
                     "origen": [IP_LOCAL, PUERTO_NODO],
                     "fecha_envio": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "nombre": nombre,
@@ -971,8 +1036,19 @@ def interfaz():
             print("Inventario:", inventario)
             print("Clientes:", clientes)
             print("Guias:", guias)
+            
         elif cmd == "set":
             SUCURSAL = input("Nueva sucursal: ")
+
+        elif cmd == "borrar": # borra las bases de datos
+            coleccion_inventario.delete_many({})
+            coleccion_clientes.delete_many({})
+            coleccion_guias.delete_many({})
+            inventario.clear()
+            clientes.clear()
+            guias.clear()
+            print("[INFO] Bases de datos borradas.")
+            break
 
 # =====================
 # Main
